@@ -36,7 +36,7 @@ const RoomsSchema = z.array(z.object({
   listen: z.enum(['mentions', 'all']).optional(),
 }).strict()).default([])
 export const WeixinConfigSchema = z.object({
-  /** Loopback address of the wxauto-bridge sidecar; the bridge never listens beyond 127.0.0.1. */
+  /** Loopback address of the WeChat sidecar (wxauto-bridge / weixin-db-bridge / weixin-ilink-bridge); it never listens beyond 127.0.0.1. */
   baseUrl: z.url().default('http://127.0.0.1:8787'),
   /** Path of the file holding the sidecar's bearer token; it must be readable only by this account (mode 0600). */
   tokenFile: z.string().trim().min(1),
@@ -60,9 +60,10 @@ export const WeixinConfigSchema = z.object({
    */
   bridgeTask: z.string().trim().min(1).max(200).regex(/^[A-Za-z0-9 _.\-\\]+$/, 'Invalid task name').default('DSH-WeChat-Bridge'),
   /**
-   * Absolute path of this machine's bridge launcher (a .cmd or .bat). The plugin starts it detached so the bridge outlives a DSH
-   * restart, and never needs to know what is inside: the client library and its local shim stay on the machine, out of the repository.
-   * Filled in the panel, so starting the bridge needs no command line.
+   * Absolute path of this machine's sidecar launcher (a .cmd or .bat). One launcher per backend - wxauto-bridge,
+   * weixin-db-bridge, weixin-ilink-bridge - and the panel points it at whichever one this Source uses. The plugin starts
+   * it detached so the sidecar outlives a DSH restart, and never needs to know what is inside: the client library and its
+   * local shim stay on the machine, out of the repository. Filled in the panel, so starting the bridge needs no command line.
    */
   bridgeLauncher: z.string().trim().max(400).default(''),
   /**
@@ -196,7 +197,7 @@ async function stopBridge(host: SourceHost, config: Record<string, unknown>, sig
 
 const Fields: FieldSpec[] = [
   { key: 'baseUrl', type: 'text', advanced: true, label: { zh: '桥地址', en: 'Bridge URL' },
-    hint: { zh: 'wxauto-bridge 的 loopback 地址，例如 http://127.0.0.1:8787；只允许本机，不要填公网地址。', en: 'Loopback address of wxauto-bridge, such as http://127.0.0.1:8787; localhost only, never a public address.' } },
+    hint: { zh: '微信 sidecar 的 loopback 地址，只允许本机、不要填公网地址。三种后端默认端口：wxauto-bridge=8787（Windows、需 wxautox4 授权、群/@/文件最全）、weixin-db-bridge=8788（wechatauto 免费只读，历史/名册/媒体归档）、weixin-ilink-bridge=9300（腾讯 iLink，免费跨 OS，仅单聊个人助手）。地址指向哪个后端，就由哪个后端服务。', en: 'Loopback address of the WeChat sidecar; localhost only, never a public address. Default ports: wxauto-bridge=8787 (Windows, needs a wxautox4 licence, fullest group/@/file support), weixin-db-bridge=8788 (free read-only wechatauto: history/roster/media archive), weixin-ilink-bridge=9300 (Tencent iLink, free and cross-OS, personal-assistant DMs only). Whichever backend you point at serves this Source.' } },
   { key: 'tokenFile', type: 'text', label: { zh: '桥 token 文件', en: 'Bridge token file' },
     hint: { zh: '保存 sidecar bearer token 的文件路径；文件权限必须是 0600，否则客户端拒绝读取。', en: 'Path of the file holding the sidecar bearer token; it must have mode 0600 or the client refuses to read it.' } },
   { key: 'selfWxid', type: 'text', pattern: '^[A-Za-z0-9_\\-]+$', label: { zh: '本账号 wxid', en: 'This account wxid' },
@@ -242,7 +243,7 @@ const Fields: FieldSpec[] = [
   { key: 'images', type: 'switch', advanced: true, label: { zh: '接收图片', en: 'Receive images' },
     hint: { zh: '开启时图片会作为附件交给模型；关闭时只在文字里留「[图片]」占位，不下载任何字节。', en: 'On hands images to the model as attachments; off leaves a `[图片]` placeholder in the text and downloads nothing.' } },
   { key: 'bridgeLauncher', type: 'text', advanced: true, label: { zh: '桥启动器', en: 'Bridge launcher' },
-    hint: { zh: '本机用来启动 wxauto-bridge 的脚本绝对路径（.cmd / .bat），例如 C:\dev\dsh-superagent-channels-ext\start-wxbridge.cmd。插件只负责把它拉起来（后台、无窗口、脱离 DSH），脚本里写了什么由你决定——微信客户端库和本机 shim 都留在机器上，不进仓库。填了它就用它启动，比计划任务更直接。', en: 'Absolute path of the script that starts wxauto-bridge on this machine (a .cmd or .bat). The plugin only launches it - detached, hidden, independent of DSH - and does not care what is inside: the client library and the machine shim stay out of the repository. With this set, Start runs it directly instead of using the scheduled task.' } },
+    hint: { zh: '本机用来启动微信 sidecar 的脚本绝对路径（.cmd / .bat）。三种后端各配一个启动器：start-wxbridge.cmd（wxauto-bridge，Windows 付费、群能力最全）、start-weixin-db.cmd（weixin-db-bridge，wechatauto 免费只读）、start-weixin-ilink.cmd（weixin-ilink-bridge，腾讯 iLink 跨 OS 个人助手）。插件只负责把它拉起来（后台、无窗口、脱离 DSH），脚本里写了什么由你决定——客户端库和本机 shim 都留在机器上，不进仓库。填了它就用它启动，比计划任务更直接；它启动哪个后端，就要和上面的「桥地址」指向同一个端口。', en: 'Absolute path of the script that starts the WeChat sidecar (a .cmd or .bat). One launcher per backend: start-wxbridge.cmd (wxauto-bridge, Windows, paid, fullest group support), start-weixin-db.cmd (weixin-db-bridge, free read-only wechatauto), start-weixin-ilink.cmd (weixin-ilink-bridge, Tencent iLink, cross-OS personal assistant). The plugin only launches it - detached, hidden, independent of DSH - and does not care what is inside: the client library and the machine shim stay out of the repository. With this set, Start runs it directly instead of the scheduled task; whichever backend it starts must use the same port as the Bridge URL above.' } },
   { key: 'bridgeTask', type: 'text', advanced: true, label: { zh: '桥的计划任务', en: 'Bridge scheduled task' },
     hint: { zh: '本机跑 wxauto-bridge 的 Windows 计划任务名。插件不自己拉起进程，只用「启动桥 / 停止桥」按钮让这个任务启停；因为桥必须跑在已登录的桌面会话里，且要活过 DSH 重启。', en: 'The Windows scheduled task that runs wxauto-bridge on this machine. The plugin never spawns it; the Start/Stop buttons ask this task to run or end it, because the bridge must live in the signed-in desktop session and outlive a DSH restart.' } },
   { key: 'pollSeconds', type: 'number', advanced: true, min: 5, max: 3600, label: { zh: '轮询间隔 / 秒', en: 'Poll interval / s' },

@@ -180,6 +180,36 @@ Check dsh-superagent: run `scripts/dsh-superagent --profile superagent status` i
    将个人 CLI（例如登录到你本人账户的 CLI）列为被阻止的命令。
 4. **提示词（Prompts）。** 设置团队段落：GitHub 披露行、审查机器人、提交作者和自动合并条件。
 
+### 微信后端（三选一）
+
+微信个人号没有官方开放的个人消息 API。本项目把收发放在一个**回环 HTTP sidecar** 后面，Node 侧只认冻结契约（`sidecar/wxauto-bridge/contract.md`），**换后端 = 换一个 sidecar 实现 + 改面板里的「桥地址 / 桥启动器 / token 文件」**，业务层零改动。三种后端：
+
+| 后端 | 默认端口 | OS | 费用 | 群 / @ | 群成员 | 媒体 | 发送 | 适用 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `wxauto-bridge`（`pc-uia` / wxautox4） | 8787 | 仅 Windows（需登录桌面微信） | **需 wxautox4 商业授权** | 群 + 私聊；`@` 用客户端标记（markup） | 仅 observed（发过言的人） | 有（取决于构建） | 文本/文件/语音，keyed 幂等 | Windows 研发群的 `@` 触发与出站 |
+| `weixin-db-bridge`（`pc-db` / wechatauto-replica） | 8788 | 仅 Windows（需登录桌面微信） | **免费**（Apache-2.0） | 群 + 私聊；`@` 不可判定（none） | **full（全量名册）** | 有（`MediaDownloader` 可用时） | **默认只读 501**；`--allow-send` 才发 | 免费只读补充：历史/名册/媒体归档 |
+| `weixin-ilink-bridge`（`ilink` / 腾讯 iLink Bot） | 9300 | **任意 OS（无需桌面微信）** | **免费**（官方通道） | **仅单聊**；无群、无 @ | observed（仅对端） | 有（CDN + AES 解密） | 文本（回传 `context_token`），keyed 幂等 | 普通用户个人助手 / 远程控制 |
+
+**默认策略**：
+
+- **iLink 默认给个人助手**：免费、扫码即用、跨 OS；代价是仅单聊、有限流，不接群、不承诺 `@`。
+- **Windows 研发群用 wxauto**：群 `@`、出站文件、语音转写最全，是当前生产主后端。
+- **wechatauto 只做只读补充**：历史/名册/媒体归档；要发送得显式 `--allow-send`，并接受与 wxauto 的 UI 互斥。
+- **不把 wxautox4 的逆向/绕过包进发布**：只调用其公开 API，授权由部署方自负，仓库不分发其文件、不含规避其授权检查的代码。
+
+**启动**（详见 `sidecar/README.md` 与各自子目录的 README）：
+
+- `sidecar\start-wxbridge.cmd`（wxauto-bridge）；`sidecar\start-weixin-db.cmd`（weixin-db，需先装 `wechatauto-replica`，读 `WXBRIDGE_TOKEN`）；`sidecar\start-weixin-ilink.cmd`（iLink，先 `node server.mjs login` 扫码存凭证，再 `run --token-file …`）。
+
+**互斥与共存**：`pc-uia` 与 `pc-db` 共用同一台桌面微信的界面——**同一微信号同一时刻只允许一个 UI 自动化客户端操作界面**；`pc-db` 在只读（不加 `--allow-send`）时不碰界面，可与 `pc-uia` 并行做历史/名册补充，但同一账号同一时刻只允许一个实例持有登录态/解密密钥。`ilink` 无界面依赖，可并行，但它是你本人微信下的一个 Bot 身份，不能与桌面客户端对同一会话双发。
+
+**4.1.12.55 结论**（实测见 `docs/research/compat-4.1.12.55.md`）：这一版把微信 4.x 的 Qt 无障碍 gate 默认关掉（gate=0），`mmui` 控件树冷启动不物化。
+
+- `weixin-db-bridge`（DB 只读）在 4.1.12.55 上**五个只读 API 全通，可直接上生产（推荐）**。
+- `wxauto-bridge`（`pc-uia`/wxautox4 41.2.3）在 4.1.12.55 **冷启动 attach 失败**（`未找到已登录的客户端主窗口`），仅当 gate 被 `wechatauto.accessibility` 热激活后才能用；**wxautox4 自己不做热激活**。因此 pc-uia 在 4.1.12.55 是**有条件可用**：先补 gate 热激活守护 + 授权确认 + 重启后复测，否则保持现状、不要贸然重启（现网 bridge 若在升级前启动，会表现为 `/rooms` 空 + 大量自动重挂）。
+- `weixin-ilink-bridge` 不受客户端版本影响。
+- 回滚点：当前客户端 `4.1.12.55`，上一可用 `4.1.9.30`；数据目录 `xwechat_files` 回退后仍可读。
+
 ### 管理 API
 
 面板使用一个本地 HTTP API，agent 也可以调用它。`SETUP.md` 用它保存设置，服务脚本读取 `GET state`。

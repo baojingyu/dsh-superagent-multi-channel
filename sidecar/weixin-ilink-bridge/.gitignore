@@ -1,0 +1,4 @@
+# iLink login credentials and the getUpdates cursor are per-machine secrets/state:
+# they must never be committed. See README §2.1.
+data/
+*.log

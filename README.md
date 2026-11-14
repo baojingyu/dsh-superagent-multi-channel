@@ -73,7 +73,7 @@ no ticket, no reply, no remote change.
 | --- | --- | --- |
 | **Feishu** (official) | history polling | topic/reply chains, AppLink deep links, images, worker reads `feishu/<id>/…` |
 | **GitHub** (official) | notification polling | issue/PR context, `gh` for code, PR/issue links |
-| **WeChat** (added) | sidecar polling | structured `@`, voice transcripts, downloadable images, worker reads `weixin/<id>/message·thread·around`, post-reattach catch-up |
+| **WeChat** (added) | sidecar polling (three backends: wxauto / pc-db / iLink) | structured `@`, voice transcripts, downloadable images, worker reads `weixin/<id>/message·thread·around`, post-reattach catch-up; iLink personal assistant by default, wxauto for Windows groups |
 | **WeCom** (added) | signed callback (plugin mounts `/wecom/<instance>`) | `@` judgement, inbound images, contact-list names, worker reads `wecom/<id>/message` |
 | **DingTalk** (added) | Stream (deployment injects the SDK connection) | staffId `@`, Markdown 5000, worker reads `dingtalk/<id>/message` |
 | **Yunxiao Projex** (added) | work-item polling | requirement/bug/task + comments, status write-back, attachment comments, worker reads `projex/<id>/item·comments` |
@@ -104,6 +104,20 @@ Feishu and GitHub are the two Sources the upstream superagent ships; the other f
 | Multiple instances | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 **Platform limits, not bugs**: WeChat/WeCom/DingTalk have no per-message deep link; WeCom and DingTalk have no history to backfill (callback/stream only); DingTalk needs an injected `connect()` (`src/sources/dingtalk-watch.ts`); WeCom/DingTalk cannot enumerate chat members; DingTalk stream events carry text, so no image is claimed.
+
+### WeChat's three backends (wxauto / pc-db / iLink)
+
+Behind the one WeChat source sit three interchangeable backends; the Node side only knows the frozen contract, so **switching backends means switching the sidecar and the panel's URL/launcher**:
+
+| Backend | Port | OS | Cost | Groups / `@` | Members | History | Send | Default use |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `wxauto-bridge` (pc-uia / wxautox4) | 8787 | Windows only | **needs a licence** | groups + DMs; `@` via client markup | observed | UI catch-up | text/files/voice | Windows dev groups |
+| `weixin-db-bridge` (pc-db / wechatauto) | 8788 | Windows only | **free** | groups + DMs; `@` undetectable | **full roster** | **full DB** | read-only 501 by default | read-only supplement: history/roster/media |
+| `weixin-ilink-bridge` (ilink / Tencent iLink) | 9300 | **any OS** | **free** | **DMs only**; no `@` | observed | realtime only | text | personal assistant (default) |
+
+- **Default policy**: iLink is the default for personal assistants (free, cross-OS, DMs only); wxauto for Windows dev groups (fullest group/`@`/file support); wechatauto is a read-only supplement (history/roster/media archive); **do not ship wxautox4 reverse-engineering / bypass in the release** — licensing is the deployer's responsibility.
+- **Exclusion**: pc-uia and pc-db share the same desktop WeChat UI — only one UI-automation client may drive the interface for the same account at a time; a read-only pc-db can run in parallel, and only `--allow-send` conflicts; ilink has no UI dependency and can run in parallel, but it is a Bot identity that cannot double-send to the same conversation as the desktop client.
+- **4.1.12.55 finding**: this build turns the WeChat 4.x Qt accessibility gate off by default (the `mmui` tree is not materialised on a cold start). `wechatauto` ships hot activation, so pc-db's DB read-only passes fully on 4.1.12.55 and **can go to production (recommended)**; `wxautox4` has no hot activation, so pc-uia **fails to attach on a cold start** and only works after the gate is hot-activated — **conditionally usable**; ilink is client-version independent. See the [compat-4.1.12.55 report](docs/research/compat-4.1.12.55.md) and [sidecar/README](sidecar/README.md).
 
 > Full background and the "why" live in the [capability matrix](docs/extensions/capability-matrix.md).
 

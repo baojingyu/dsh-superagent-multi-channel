@@ -26,6 +26,25 @@ this bundle's additions. ✅ present · ➖ not applicable to the platform · �
 | Message deep link | ✅ AppLink | ✅ issue/PR URL | ❌ | ❌ | ❌ | ✅ item page |
 | Multiple instances | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
+## WeChat's three backends (wxauto / pc-db / iLink)
+
+The **WeChat** column above is the **`wxauto-bridge` (`pc-uia` / wxautox4)** baseline. Behind the one WeChat kind sit three interchangeable backends; they differ as follows (✅ present · ⚠️ conditional · ❌ absent / not applicable):
+
+| Capability | `wxauto-bridge` (pc-uia, wxautox4) | `weixin-db-bridge` (pc-db, wechatauto-replica) | `weixin-ilink-bridge` (ilink, Tencent iLink Bot) |
+| --- | --- | --- | --- |
+| OS / cost | Windows only; **needs a wxautox4 commercial licence** | Windows only; **free** (Apache-2.0) | **any OS (no desktop WeChat)**; **free** |
+| Groups / DMs | ✅ groups + DMs | ✅ groups + DMs | ⚠️ **DMs only** (no group chats, no group roster) |
+| Structured `@` | ⚠️ `markup` (client markup; rename/paste can forge) | ❌ `none` (`ats` always empty; rely on Policy/keywords) | ❌ `none` (`ats` always empty) |
+| Group roster | ⚠️ `observed` (only those who spoke) | ✅ `full` (full roster) | ⚠️ `observed` (peer only) |
+| History backfill | ⚠️ UI scroll catch-up (last 20) | ✅ full DB history, pageable | ❌ realtime only |
+| Inbound images / media | ✅ build-dependent `download()` | ✅ when `MediaDownloader` is available | ✅ CDN download + AES decrypt |
+| Outbound send | ✅ text/files/voice; keyed idempotency | ⚠️ **read-only 501 by default**; `--allow-send` to send | ✅ text (echoes `context_token`); keyed idempotency |
+| Realtime listening | ✅ `AddListenChat + StartListening` (drives the UI) | ❌ no listener; read-only DB + optional UIA send | ✅ long-poll `getUpdates` (no UI) |
+| 4.1.12.55 finding | ⚠️ cold-start gate=0 attach fails; needs hot-activation + licence + retest | ✅ DB read-only all pass; **recommended for production** | ✅ client-version independent |
+| Exclusion with others | shares the one desktop UI with pc-db's send path (one at a time) | read-only can run in parallel; exclusion only with `--allow-send` | no UI dependency, parallel-capable (Bot identity; no double-send) |
+
+**4.1.12.55 finding**: this build turns the WeChat 4.x Qt accessibility gate off by default (the `mmui` tree is not materialised on a cold start). `wechatauto` ships hot activation, so pc-db's DB read-only passes fully on 4.1.12.55 and **can go to production**; `wxautox4` has no hot activation, so pc-uia fails to attach on a cold start and only works after the gate is hot-activated — **conditionally usable** (see `docs/research/compat-4.1.12.55.md`). Startup, exclusion and the full version matrix are in `sidecar/README.md`.
+
 ## Platform limits, and why they are not bugs
 
 - **No deep link** on WeChat, WeCom and DingTalk: none of the three exposes a per-message URL; the panel names the Source.

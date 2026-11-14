@@ -62,7 +62,7 @@
 | --- | --- | --- |
 | **飞书**（官方） | 轮询历史 | 话题/回复链、AppLink 深链、图片、worker 读 `feishu/<id>/…` |
 | **GitHub**（官方） | 通知轮询 | Issue/PR 上下文、`gh` 读代码、PR/Issue 链接 |
-| **微信**（新增） | sidecar 轮询 | 结构化 @、语音转写、图片可下载、worker 读 `weixin/<id>/message·thread·around`、重挂补读 |
+| **微信**（新增） | sidecar 轮询（三后端可选：wxauto / pc-db / iLink） | 结构化 @、语音转写、图片可下载、worker 读 `weixin/<id>/message·thread·around`、重挂补读；默认 iLink 个人助手、Windows 群用 wxauto |
 | **企业微信**（新增） | 签名回调（插件自挂 `/wecom/<实例>`） | @ 判定、入站图片、通讯录名单、worker 读 `wecom/<id>/message` |
 | **钉钉**（新增） | Stream（部署注入 SDK 连接） | staffId 结构化 @、Markdown 5000、worker 读 `dingtalk/<id>/message` |
 | **云效 Projex**（新增） | 工作项轮询 | 需求/缺陷/任务+评论、状态回写、附件评论、worker 读 `projex/<id>/item·comments` |
@@ -93,6 +93,20 @@
 | 多实例 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 **平台限制（不是 bug）**：微信/企业微信/钉钉没有消息深链；企业微信、钉钉没有历史回补（仅回调 / 流）；钉钉 Stream 需要部署注入 `connect()`（`src/sources/dingtalk-watch.ts`）；企业微信 / 钉钉无法枚举群成员；钉钉流事件只带文本，不声称图片。
+
+### 微信三后端（wxauto / pc-db / iLink）
+
+微信同一个来源背后有三种可替换后端，Node 侧只认冻结契约，**换后端 = 换一个 sidecar + 改面板地址/启动器**：
+
+| 后端 | 端口 | OS | 费用 | 群 / @ | 成员 | 历史 | 发送 | 默认用途 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `wxauto-bridge`（pc-uia / wxautox4） | 8787 | 仅 Windows | **需授权** | 群 + 私聊；@ 用客户端标记 | observed | UI 补读 | 文本/文件/语音 | Windows 研发群 |
+| `weixin-db-bridge`（pc-db / wechatauto） | 8788 | 仅 Windows | **免费** | 群 + 私聊；@ 不可判定 | **full 全量** | **全量 DB** | 默认只读 501 | 只读补充：历史/名册/媒体 |
+| `weixin-ilink-bridge`（ilink / 腾讯 iLink） | 9300 | **任意 OS** | **免费** | **仅单聊**；无 @ | observed | 仅实时 | 文本 | 个人助手（默认） |
+
+- **默认策略**：iLink 默认给个人助手（免费跨 OS、仅单聊）；Windows 研发群用 wxauto（群/@/文件最全）；wechatauto 只做只读补充（历史/名册/媒体归档）；**不把 wxautox4 的逆向/绕过包进发布**，授权由部署方自负。
+- **互斥**：pc-uia 与 pc-db 共用同一台桌面微信的 UI，同一微信号同一时刻只允许一个 UI 自动化客户端操作界面；pc-db 只读可并行，`--allow-send` 时才互斥；ilink 无 UI 依赖可并行，但是 Bot 身份、不能与桌面端对同一会话双发。
+- **4.1.12.55 结论**：该版把微信 4.x 的 Qt 无障碍 gate 默认关掉（`mmui` 树冷启动不物化）。`wechatauto` 自带热激活，pc-db 的 DB 只读在 4.1.12.55 **全通、可上生产（推荐）**；`wxautox4` 无热激活，pc-uia **冷启动 attach 失败**、仅在 gate 热激活后可用，属**有条件可用**；ilink 不受客户端版本影响。详见 [compat-4.1.12.55 报告](docs/research/compat-4.1.12.55.md) 与 [sidecar/README](sidecar/README.md)。
 
 > 完整背景与「为什么」见 [能力矩阵](docs/extensions/capability-matrix.zh-CN.md)。
 

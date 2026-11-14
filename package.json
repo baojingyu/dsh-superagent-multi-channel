@@ -56,7 +56,21 @@
     "docs/images",
     "prompts",
     "skills",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "sidecar/README.md",
+    "sidecar/weixin-db-bridge/server.py",
+    "sidecar/weixin-db-bridge/selftest.py",
+    "sidecar/weixin-db-bridge/README.md",
+    "sidecar/weixin-ilink-bridge/server.mjs",
+    "sidecar/weixin-ilink-bridge/selftest.mjs",
+    "sidecar/weixin-ilink-bridge/README.md",
+    "sidecar/weixin-ilink-bridge/LICENSE",
+    "sidecar/weixin-ilink-bridge/lib/*.mjs",
+    "sidecar/gate-guard/gate_guard.py",
+    "sidecar/gate-guard/README.md",
+    "sidecar/gate-guard/start-gate-guard.cmd",
+    "sidecar/start-weixin-db.cmd",
+    "sidecar/start-weixin-ilink.cmd"
   ],
   "dsh": {
     "bundle": {

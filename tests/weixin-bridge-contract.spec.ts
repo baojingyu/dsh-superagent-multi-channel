@@ -28,6 +28,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { WeixinConfigSchema, weixinKind } from '../src/sources/chat/weixin/kind.ts'
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const NODE = process.execPath
@@ -306,6 +307,149 @@ describe.skipIf(!DB_READY)('weixin-db-bridge (pc-db) HTTP contract — fake back
     const output = stderrOf()
     expect(output).not.toContain(TOKEN)
     expect(output).toContain('token=set')
+  })
+})
+
+// ===========================================================================
+// pc-db "team" profile (sidecar/weixin-db-bridge, Python --fake --profile team)
+// ===========================================================================
+
+describe.skipIf(!DB_READY)('weixin-db-bridge (pc-db) team profile — text/files/@ sending', () => {
+  const TOKEN = `db-team-${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`
+  let child: ChildProcess | undefined
+  let stderrOf = () => ''
+  let port = 0
+  let base = ''
+  let dir = ''
+
+  beforeAll(async () => {
+    dir = mkdtempSync(join(tmpdir(), 'db-team-'))
+    let lastError: unknown
+    for (let attempt = 0; attempt < 5 && !base; attempt += 1) {
+      port = pickPort()
+      const spawned = spawnSidecar(PYTHON!, [DB_SERVER, '--fake', '--profile', 'team', '--port', String(port), '--token', TOKEN, '--quiet'])
+      child = spawned.child
+      stderrOf = spawned.stderr
+      try {
+        await waitUntil(async () => (await call(`http://127.0.0.1:${port}`, TOKEN, '/health')).json?.ok === true, 10_000, 'db team bridge')
+        base = `http://127.0.0.1:${port}`
+      } catch (error) {
+        lastError = error
+        await stopSidecar(child)
+        child = undefined
+      }
+    }
+    if (!base) throw lastError ?? new Error('the db team bridge did not start')
+  }, TEST_TIMEOUT_MS)
+
+  afterAll(async () => {
+    await stopSidecar(child)
+    if (port) {
+      let closed = false
+      for (let attempt = 0; attempt < 10 && !closed; attempt += 1) {
+        closed = !(await isPortOpen(port))
+        if (!closed) await new Promise(resolve_ => setTimeout(resolve_, 200))
+      }
+      expect(closed, `the db team bridge still listens on 127.0.0.1:${port} after cleanup`).toBe(true)
+    }
+    if (dir) rmSync(dir, { recursive: true, force: true })
+  }, TEST_TIMEOUT_MS)
+
+  it('reports health 200 with the send capability enabled in the team profile', async () => {
+    const reply = await call(base, TOKEN, '/health')
+    expect(reply.status).toBe(200)
+    expect(reply.json).toMatchObject({ ok: true, available: true, backend: 'pc-db' })
+    expect(reply.json.capabilities).toMatchObject({ members: 'full', media: true, send: true })
+  })
+
+  it('serves the group message stream as the trigger source, with §3 event fields', async () => {
+    const page = await call(base, TOKEN, `/messages?room=${encodeURIComponent(DB_GROUP)}&limit=50`)
+    expect(page.status).toBe(200)
+    const events = page.json.events as any[]
+    expect(events.length).toBeGreaterThan(0)
+    expect(typeof page.json.next).toBe('string')
+    for (const event of events) {
+      expect(event.room).toBe(DB_GROUP)
+      expect(typeof event.sender?.id).toBe('string')
+      expect(typeof event.text).toBe('string')
+      expect(event.text.length).toBeGreaterThan(0)
+      expect(event.at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/)
+      expect(Array.isArray(event.ats)).toBe(true)
+      expect(typeof event.own).toBe('boolean')
+      expect(Array.isArray(event.media)).toBe(true)
+    }
+  })
+
+  it('sends text, text+at, and text+files (absolute paths), answering 200 {msgId,deduped}', async () => {
+    const text = await call(base, TOKEN, '/send', { method: 'POST', body: { room: DB_GROUP, text: '团队模式你好' } })
+    expect(text.status).toBe(200)
+    expect(typeof text.json.msgId).toBe('string')
+    expect(text.json.deduped).toBe(false)
+    expect(text.json.text).toBe('团队模式你好')
+
+    const mention = await call(base, TOKEN, '/send', { method: 'POST', body: { room: DB_GROUP, text: '请看下', at: ['阿黎'] } })
+    expect(mention.status).toBe(200)
+    expect(mention.json.at).toEqual(['阿黎'])
+
+    // A real temp file gives a genuine absolute path, as the team launcher expects.
+    const file = join(dir, 'report.txt')
+    writeFileSync(file, 'hello')
+    const files = await call(base, TOKEN, '/send', { method: 'POST', body: { room: DB_GROUP, text: '附件', files: [file] } })
+    expect(files.status).toBe(200)
+    expect(files.json.files).toEqual([file])
+
+    const combined = await call(base, TOKEN, '/send', { method: 'POST', body: { room: DB_GROUP, text: 'x', files: [file], at: ['王博'] } })
+    expect(combined.status).toBe(200)
+    expect(combined.json.files).toEqual([file])
+    expect(combined.json.at).toEqual(['王博'])
+  })
+
+  it('de-dupes a replayed Idempotency-Key to the same msgId', async () => {
+    const body = { room: DB_GROUP, text: '幂等', idempotencyKey: 'team-k1' }
+    const first = await call(base, TOKEN, '/send', { method: 'POST', body })
+    expect(first.json.deduped).toBe(false)
+    const again = await call(base, TOKEN, '/send', { method: 'POST', body })
+    expect(again.json.deduped).toBe(true)
+    expect(again.json.msgId).toBe(first.json.msgId)
+  })
+
+  it('records the /listen set (200 listening/added/removed/failed) without a UI takeover', async () => {
+    const listen = await call(base, TOKEN, '/listen', { method: 'POST', body: { rooms: [DB_GROUP] } })
+    expect(listen.status).toBe(200)
+    expect((listen.json.listening as any[]).map(room => room.id)).toContain(DB_GROUP)
+    expect(Array.isArray(listen.json.added)).toBe(true)
+    expect(Array.isArray(listen.json.removed)).toBe(true)
+    expect(Array.isArray(listen.json.failed)).toBe(true)
+  })
+
+  it('never prints the bearer token', () => {
+    expect(stderrOf()).not.toContain(TOKEN)
+  })
+})
+
+// ===========================================================================
+// two-profile config: WeixinConfigSchema.profile (personal default / team)
+// ===========================================================================
+
+describe('weixin profile config — WeixinConfigSchema.profile', () => {
+  const minimal = { tokenFile: '/tmp/t', selfWxid: 'wxid_self' }
+
+  it('defaults to personal, accepts team, and rejects any other value', () => {
+    const parsed = WeixinConfigSchema.parse(minimal)
+    expect(parsed.profile).toBe('personal')
+    // The default bridge URL follows the default profile (iLink on 9300).
+    expect(parsed.baseUrl).toBe('http://127.0.0.1:9300')
+    expect(WeixinConfigSchema.parse({ ...minimal, profile: 'team' }).profile).toBe('team')
+    expect(WeixinConfigSchema.safeParse({ ...minimal, profile: 'other' }).success).toBe(false)
+  })
+
+  it('exposes a profile select naming both personas and their ports', () => {
+    const field = weixinKind.fields.find(candidate => candidate.key === 'profile')
+    if (field?.type !== 'select') throw new Error('the profile field must be a select field')
+    expect(field.options.map(option => option.value)).toEqual(['personal', 'team'])
+    const hint = `${field.hint?.zh ?? ''} ${field.hint?.en ?? ''}`
+    expect(hint).toContain('9300')
+    expect(hint).toContain('8788')
   })
 })
 

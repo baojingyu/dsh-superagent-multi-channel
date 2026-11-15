@@ -180,34 +180,32 @@ Check dsh-superagent: run `scripts/dsh-superagent --profile superagent status` i
    将个人 CLI（例如登录到你本人账户的 CLI）列为被阻止的命令。
 4. **提示词（Prompts）。** 设置团队段落：GitHub 披露行、审查机器人、提交作者和自动合并条件。
 
-### 微信后端（三选一）
+### 微信来源：两个 profile（personal / team）
 
-微信个人号没有官方开放的个人消息 API。本项目把收发放在一个**回环 HTTP sidecar** 后面，Node 侧只认冻结契约（`sidecar/wxauto-bridge/contract.md`），**换后端 = 换一个 sidecar 实现 + 改面板里的「桥地址 / 桥启动器 / token 文件」**，业务层零改动。三种后端：
+微信个人号没有官方开放的个人消息 API。本项目把收发放在一个**回环 HTTP sidecar** 后面，Node 侧只认冻结契约（`sidecar/wxauto-bridge/contract.md`）。**一个微信 Source 用 `profile` 字段提供两个 profile**：换 profile = 换一个 sidecar 实现 + 改面板里的「桥地址 / 桥启动器 / token 文件」，业务层零改动。**默认 profile 是 `personal`。**
 
-| 后端 | 默认端口 | OS | 费用 | 群 / @ | 群成员 | 媒体 | 发送 | 适用 |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `wxauto-bridge`（`pc-uia` / wxautox4） | 8787 | 仅 Windows（需登录桌面微信） | **需 wxautox4 商业授权** | 群 + 私聊；`@` 用客户端标记（markup） | 仅 observed（发过言的人） | 有（取决于构建） | 文本/文件/语音，keyed 幂等 | Windows 研发群的 `@` 触发与出站 |
-| `weixin-db-bridge`（`pc-db` / wechatauto-replica） | 8788 | 仅 Windows（需登录桌面微信） | **免费**（Apache-2.0） | 群 + 私聊；`@` 不可判定（none） | **full（全量名册）** | 有（`MediaDownloader` 可用时） | **默认只读 501**；`--allow-send` 才发 | 免费只读补充：历史/名册/媒体归档 |
-| `weixin-ilink-bridge`（`ilink` / 腾讯 iLink Bot） | 9300 | **任意 OS（无需桌面微信）** | **免费**（官方通道） | **仅单聊**；无群、无 @ | observed（仅对端） | 有（CDN + AES 解密） | 文本（回传 `context_token`），keyed 幂等 | 普通用户个人助手 / 远程控制 |
+| profile | 默认端口 | 后端 | OS | 费用 | 群 / @ | 群成员 | 媒体 | 发送 | 适用 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `personal`（**默认**） | 9300 | `weixin-ilink-bridge`（`ilink` / 腾讯 iLink Bot） | **任意 OS（无需桌面微信）** | **免费**（官方通道） | **仅单聊**；无群、无 @ | observed（仅对端） | 有（CDN + AES 解密） | 文本（回传 `context_token`），keyed 幂等 | 个人助手 / 远程控制 / 自派任务 |
+| `team` | 8788 | `weixin-db-bridge`（`pc-db` / wechatauto-replica） | 仅 Windows（需登录桌面微信，**4.1.12+**） | **免费**（Apache-2.0） | 群 + 私聊（DB 读库触发群消息）；入站 `@` 不可判定（none） | **full（全量名册）** | 有（`MediaDownloader` 可用时） | **默认只读 501**；`--profile team` 开启文本/文件/群 @ 发送（UIA） | 研发群 replica：群消息触发、历史/名册、文本/文件/@ |
 
 **默认策略**：
 
-- **iLink 默认给个人助手**：免费、扫码即用、跨 OS；代价是仅单聊、有限流，不接群、不承诺 `@`。
-- **Windows 研发群用 wxauto**：群 `@`、出站文件、语音转写最全，是当前生产主后端。
-- **wechatauto 只做只读补充**：历史/名册/媒体归档；要发送得显式 `--allow-send`，并接受与 wxauto 的 UI 互斥。
-- **不把 wxautox4 的逆向/绕过包进发布**：只调用其公开 API，授权由部署方自负，仓库不分发其文件、不含规避其授权检查的代码。
+- **`personal` 是默认 profile**：个人 iLink 助手——免费、扫码即用、跨 OS、可自派任务；代价是仅单聊（不接群、不承诺 `@`）、有限流。
+- **`team` 用 replica**：weixin-db-bridge，免费（Apache-2.0），DB 读库触发群消息、全量历史/名册、可在 PC 微信上真发**文本/文件/群 @**（需以 `--profile team` 启动；默认只读）。要求 Windows + 微信 **4.1.12+**，发送占用桌面界面。**无语音转写、无朋友圈、无好友/建群**。
+- **发布只带这两个后端**：两个 sidecar 加 `start-weixin-ilink.cmd`、`start-weixin-db.cmd`。`wxautox4` / `gate-guard` **不再默认发布**；任何 wxautox4 后端都是部署方自行安装并授权的可选外部组件。仓库不分发其文件、不含规避其授权检查的代码。
 
 **启动**（详见 `sidecar/README.md` 与各自子目录的 README）：
 
-- `sidecar\start-wxbridge.cmd`（wxauto-bridge）；`sidecar\start-weixin-db.cmd`（weixin-db，需先装 `wechatauto-replica`，读 `WXBRIDGE_TOKEN`）；`sidecar\start-weixin-ilink.cmd`（iLink，先 `node server.mjs login` 扫码存凭证，再 `run --token-file …`）。
+- `personal` → `sidecar\start-weixin-ilink.cmd`（iLink，先 `node server.mjs login` 扫码存凭证，再 `run --token-file …`，端口 9300）。
+- `team` → `sidecar\start-weixin-db.cmd`（weixin-db，需先装 `wechatauto-replica`，读 `WXBRIDGE_TOKEN`，端口 8788）；要真发文本/文件/@ 追加 `--profile team`（或 `set WXBRIDGE_PROFILE=team`）。
 
-**互斥与共存**：`pc-uia` 与 `pc-db` 共用同一台桌面微信的界面——**同一微信号同一时刻只允许一个 UI 自动化客户端操作界面**；`pc-db` 在只读（不加 `--allow-send`）时不碰界面，可与 `pc-uia` 并行做历史/名册补充，但同一账号同一时刻只允许一个实例持有登录态/解密密钥。`ilink` 无界面依赖，可并行，但它是你本人微信下的一个 Bot 身份，不能与桌面客户端对同一会话双发。
+**共存**：`ilink` 无界面依赖，只读的 `pc-db` 也不碰桌面界面，两者都不会驱动界面；但同一账号同一时刻只允许一个实例持有登录态/解密密钥。`ilink` 是你本人微信下的一个 Bot 身份，不能与桌面客户端对同一会话双发。若另行加装 wxautox4 的 UI 后端，同一账号仍只允许一个 UI 自动化客户端。
 
 **4.1.12.55 结论**（实测见 `docs/research/compat-4.1.12.55.md`）：这一版把微信 4.x 的 Qt 无障碍 gate 默认关掉（gate=0），`mmui` 控件树冷启动不物化。
 
-- `weixin-db-bridge`（DB 只读）在 4.1.12.55 上**五个只读 API 全通，可直接上生产（推荐）**。
-- `wxauto-bridge`（`pc-uia`/wxautox4 41.2.3）在 4.1.12.55 **冷启动 attach 失败**（`未找到已登录的客户端主窗口`），仅当 gate 被 `wechatauto.accessibility` 热激活后才能用；**wxautox4 自己不做热激活**。因此 pc-uia 在 4.1.12.55 是**有条件可用**：先补 gate 热激活守护 + 授权确认 + 重启后复测，否则保持现状、不要贸然重启（现网 bridge 若在升级前启动，会表现为 `/rooms` 空 + 大量自动重挂）。
-- `weixin-ilink-bridge` 不受客户端版本影响。
+- `team` 的 `weixin-db-bridge` 在 4.1.12.55 上 **DB 只读五个 API 全通，可直接上生产**；其 `--profile team` 发送走 `wechatauto` 的 UIA/OCR（要求完整 `wechatauto-replica`、桌面可见）。
+- `personal` 的 `weixin-ilink-bridge` 不受客户端版本影响。
 - 回滚点：当前客户端 `4.1.12.55`，上一可用 `4.1.9.30`；数据目录 `xwechat_files` 回退后仍可读。
 
 ### 管理 API

@@ -73,7 +73,7 @@ no ticket, no reply, no remote change.
 | --- | --- | --- |
 | **Feishu** (official) | history polling | topic/reply chains, AppLink deep links, images, worker reads `feishu/<id>/…` |
 | **GitHub** (official) | notification polling | issue/PR context, `gh` for code, PR/issue links |
-| **WeChat** (added) | sidecar polling (three backends: wxauto / pc-db / iLink) | structured `@`, voice transcripts, downloadable images, worker reads `weixin/<id>/message·thread·around`, post-reattach catch-up; iLink personal assistant by default, wxauto for Windows groups |
+| **WeChat** (added) | sidecar polling (two profiles: personal iLink / team replica) | structured `@`, voice transcripts, downloadable images, worker reads `weixin/<id>/message·thread·around`, post-reattach catch-up; `personal` (default) = iLink single-chat assistant, `team` = Windows dev-group replica (group trigger, history/roster, text/file/@ send) |
 | **WeCom** (added) | signed callback (plugin mounts `/wecom/<instance>`) | `@` judgement, inbound images, contact-list names, worker reads `wecom/<id>/message` |
 | **DingTalk** (added) | Stream (deployment injects the SDK connection) | staffId `@`, Markdown 5000, worker reads `dingtalk/<id>/message` |
 | **Yunxiao Projex** (added) | work-item polling | requirement/bug/task + comments, status write-back, attachment comments, worker reads `projex/<id>/item·comments` |
@@ -105,19 +105,18 @@ Feishu and GitHub are the two Sources the upstream superagent ships; the other f
 
 **Platform limits, not bugs**: WeChat/WeCom/DingTalk have no per-message deep link; WeCom and DingTalk have no history to backfill (callback/stream only); DingTalk needs an injected `connect()` (`src/sources/dingtalk-watch.ts`); WeCom/DingTalk cannot enumerate chat members; DingTalk stream events carry text, so no image is claimed.
 
-### WeChat's three backends (wxauto / pc-db / iLink)
+### WeChat's two profiles (personal / team)
 
-Behind the one WeChat source sit three interchangeable backends; the Node side only knows the frozen contract, so **switching backends means switching the sidecar and the panel's URL/launcher**:
+One WeChat source serves two profiles behind the frozen contract; the Node side only knows the contract, so **switching profile means switching the sidecar and the panel's URL/launcher**. The default profile is `personal`:
 
-| Backend | Port | OS | Cost | Groups / `@` | Members | History | Send | Default use |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `wxauto-bridge` (pc-uia / wxautox4) | 8787 | Windows only | **needs a licence** | groups + DMs; `@` via client markup | observed | UI catch-up | text/files/voice | Windows dev groups |
-| `weixin-db-bridge` (pc-db / wechatauto) | 8788 | Windows only | **free** | groups + DMs; `@` undetectable | **full roster** | **full DB** | read-only 501 by default | read-only supplement: history/roster/media |
-| `weixin-ilink-bridge` (ilink / Tencent iLink) | 9300 | **any OS** | **free** | **DMs only**; no `@` | observed | realtime only | text | personal assistant (default) |
+| Profile | Port | Backend | OS | Cost | Groups / `@` | Members | History | Send | Default use |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `personal` (default) | 9300 | `weixin-ilink-bridge` (ilink / Tencent iLink) | **any OS** | **free** | **DMs only**; no groups, no `@` | observed | realtime only | text | personal assistant / remote control / self-dispatched tasks |
+| `team` | 8788 | `weixin-db-bridge` (pc-db / wechatauto, needs `wechatauto-replica`) | Windows only (WeChat 4.1.12+) | **free** | groups + DMs (DB-triggered group messages); inbound `@` undetectable | **full roster** | **full DB** | read-only by default; `--profile team` enables text/file/group-@ (UIA) | dev-group replica: group trigger, history/roster, text/file/@ |
 
-- **Default policy**: iLink is the default for personal assistants (free, cross-OS, DMs only); wxauto for Windows dev groups (fullest group/`@`/file support); wechatauto is a read-only supplement (history/roster/media archive); **do not ship wxautox4 reverse-engineering / bypass in the release** — licensing is the deployer's responsibility.
-- **Exclusion**: pc-uia and pc-db share the same desktop WeChat UI — only one UI-automation client may drive the interface for the same account at a time; a read-only pc-db can run in parallel, and only `--allow-send` conflicts; ilink has no UI dependency and can run in parallel, but it is a Bot identity that cannot double-send to the same conversation as the desktop client.
-- **4.1.12.55 finding**: this build turns the WeChat 4.x Qt accessibility gate off by default (the `mmui` tree is not materialised on a cold start). `wechatauto` ships hot activation, so pc-db's DB read-only passes fully on 4.1.12.55 and **can go to production (recommended)**; `wxautox4` has no hot activation, so pc-uia **fails to attach on a cold start** and only works after the gate is hot-activated — **conditionally usable**; ilink is client-version independent. See the [compat-4.1.12.55 report](docs/research/compat-4.1.12.55.md) and [sidecar/README](sidecar/README.md).
+- **Default policy**: `personal` iLink is the default (free, cross-OS, DMs only, self-dispatched tasks); `team` uses replica for Windows dev groups (DB-triggered group messages, full history/roster, sends text/file/group-@ with `--profile team`). **`team` needs `wechatauto-replica` installed and WeChat 4.1.12+; no voice, no Moments, no friends/create-group.** The release ships only these two backends and two launchers — **`wxautox4` / `gate-guard` are not bundled by default**, and licensing of any optional wxautox4 backend is the deployer's responsibility.
+- **Coexistence**: ilink has no UI dependency and read-only pc-db does not touch the desktop UI, so either can run without driving the interface; `team`'s send path (UIA/OCR) does drive it, so one UI-automation client per account; only one instance may hold the account login/decryption keys at a time, and ilink is a Bot identity that cannot double-send to the same conversation as a desktop client.
+- **4.1.12.55 finding**: this build turns the WeChat 4.x Qt accessibility gate off by default (the `mmui` tree is not materialised on a cold start). `wechatauto` ships hot activation, so `team`'s replica DB read passes fully on 4.1.12.55 and **can go to production** (its `--profile team` send uses UIA/OCR); `personal`'s ilink is client-version independent. See the [compat-4.1.12.55 report](docs/research/compat-4.1.12.55.md) and [sidecar/README](sidecar/README.md).
 
 > Full background and the "why" live in the [capability matrix](docs/extensions/capability-matrix.md).
 

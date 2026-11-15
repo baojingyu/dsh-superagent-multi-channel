@@ -36,8 +36,14 @@ const RoomsSchema = z.array(z.object({
   listen: z.enum(['mentions', 'all']).optional(),
 }).strict()).default([])
 export const WeixinConfigSchema = z.object({
-  /** Loopback address of the WeChat sidecar (wxauto-bridge / weixin-db-bridge / weixin-ilink-bridge); it never listens beyond 127.0.0.1. */
-  baseUrl: z.url().default('http://127.0.0.1:8787'),
+  /**
+   * Which profile this Source runs as. `personal` (the default) is the Tencent iLink personal assistant (single-chat, cross-OS);
+   * `team` is the replica profile for dev groups: it reads history/roster and, started with `--profile team`, can send text/files
+   * and @ group members. It records the profile and drives the field hints; the bridge URL and the launcher still decide the real backend.
+   */
+  profile: z.enum(['personal', 'team']).default('personal'),
+  /** Loopback address of the WeChat sidecar: personal = weixin-ilink-bridge on 9300, team = weixin-db-bridge on 8788; never beyond 127.0.0.1. */
+  baseUrl: z.url().default('http://127.0.0.1:9300'),
   /** Path of the file holding the sidecar's bearer token; it must be readable only by this account (mode 0600). */
   tokenFile: z.string().trim().min(1),
   /** The agent's own wxid: what group `@`s and own messages are judged against. */
@@ -60,10 +66,11 @@ export const WeixinConfigSchema = z.object({
    */
   bridgeTask: z.string().trim().min(1).max(200).regex(/^[A-Za-z0-9 _.\-\\]+$/, 'Invalid task name').default('DSH-WeChat-Bridge'),
   /**
-   * Absolute path of this machine's sidecar launcher (a .cmd or .bat). One launcher per backend - wxauto-bridge,
-   * weixin-db-bridge, weixin-ilink-bridge - and the panel points it at whichever one this Source uses. The plugin starts
-   * it detached so the sidecar outlives a DSH restart, and never needs to know what is inside: the client library and its
-   * local shim stay on the machine, out of the repository. Filled in the panel, so starting the bridge needs no command line.
+   * Absolute path of this machine's sidecar launcher (a .cmd or .bat). One launcher per profile - weixin-ilink-bridge
+   * (start-weixin-ilink.cmd) for personal, weixin-db-bridge (start-weixin-db.cmd) for team - and the panel points it at
+   * whichever one this Source uses. The plugin starts it detached so the sidecar outlives a DSH restart, and never needs
+   * to know what is inside: the client library and its local shim stay on the machine, out of the repository. Filled in
+   * the panel, so starting the bridge needs no command line.
    */
   bridgeLauncher: z.string().trim().max(400).default(''),
   /**
@@ -171,7 +178,7 @@ function startLauncher(config: Record<string, unknown>): number | undefined {
 
 /** The PID listening on the bridge's own port, or none. Read from netstat so it works after a DSH restart lost any in-memory state. */
 async function bridgePids(host: SourceHost, config: Record<string, unknown>, signal?: AbortSignal): Promise<string[]> {
-  const port = Number(new URL(String(config.baseUrl ?? 'http://127.0.0.1:8787')).port || 80)
+  const port = Number(new URL(String(config.baseUrl ?? 'http://127.0.0.1:9300')).port || 80)
   const commands = host.context({ kind: SOURCE, health: ['weixin'] }).commands.withSignal(signal)
   const listing = await commands.run('netstat', ['-ano', '-p', 'tcp'])
   const pattern = new RegExp(`127\\.0\\.0\\.1:${port}\\s+0\\.0\\.0\\.0:0\\s+LISTENING\\s+(\\d+)`, 'g')
@@ -188,7 +195,7 @@ async function stopBridge(host: SourceHost, config: Record<string, unknown>, sig
     const commandLine = await commands.run('powershell', ['-NoProfile', '-NonInteractive', '-Command',
       `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`]).catch(() => '')
     // Never kill a stranger that happens to own the port: the command line has to name the sidecar.
-    if (!/wxauto-bridge|server\.py/i.test(commandLine)) continue
+    if (!/wxauto-bridge|weixin-(?:db|ilink)-bridge|server\.(?:py|mjs)/i.test(commandLine)) continue
     await commands.run('taskkill', ['/PID', pid, '/T', '/F'])
     ended += 1
   }
@@ -196,8 +203,14 @@ async function stopBridge(host: SourceHost, config: Record<string, unknown>, sig
 }
 
 const Fields: FieldSpec[] = [
+  { key: 'profile', type: 'select', label: { zh: '运行 profile', en: 'Profile' },
+    options: [
+      { value: 'personal', label: { zh: '个人 iLink（默认，9300）', en: 'Personal iLink (default, 9300)' } },
+      { value: 'team', label: { zh: '研发群 replica（8788）', en: 'Team replica (8788)' } },
+    ],
+    hint: { zh: '这个微信 Source 面向谁：personal（默认）=个人 iLink 单聊助手（腾讯 iLink，start-weixin-ilink.cmd，桥地址 9300）；team=研发群 replica（weixin-db-bridge，start-weixin-db.cmd，桥地址 8788，需 Windows 桌面微信 4.1.12+）。team 默认只读；用 `--profile team` 启动后才发文本/文件/群@。它只记录 profile 与推荐配置，真正的后端仍由下面的「桥地址」和「桥启动器」决定。', en: 'Who this WeChat Source serves: personal (default) = personal iLink assistant (Tencent iLink, start-weixin-ilink.cmd, bridge URL 9300); team = replica for dev groups (weixin-db-bridge, start-weixin-db.cmd, bridge URL 8788, needs Windows desktop WeChat 4.1.12+). team is read-only until started with `--profile team`, which enables text/files/group @. It records the profile and its recommended settings; the Bridge URL and launcher below still decide the real backend.' } },
   { key: 'baseUrl', type: 'text', advanced: true, label: { zh: '桥地址', en: 'Bridge URL' },
-    hint: { zh: '微信 sidecar 的 loopback 地址，只允许本机、不要填公网地址。三种后端默认端口：wxauto-bridge=8787（Windows、需 wxautox4 授权、群/@/文件最全）、weixin-db-bridge=8788（wechatauto 免费只读，历史/名册/媒体归档）、weixin-ilink-bridge=9300（腾讯 iLink，免费跨 OS，仅单聊个人助手）。地址指向哪个后端，就由哪个后端服务。', en: 'Loopback address of the WeChat sidecar; localhost only, never a public address. Default ports: wxauto-bridge=8787 (Windows, needs a wxautox4 licence, fullest group/@/file support), weixin-db-bridge=8788 (free read-only wechatauto: history/roster/media archive), weixin-ilink-bridge=9300 (Tencent iLink, free and cross-OS, personal-assistant DMs only). Whichever backend you point at serves this Source.' } },
+    hint: { zh: '微信 sidecar 的 loopback 地址，只允许本机、不要填公网地址。按 profile 填：personal（默认）用 weixin-ilink-bridge 的 9300（腾讯 iLink，免费跨 OS，仅单聊个人助手）；team 用 weixin-db-bridge 的 8788（wechatauto 免费；默认只读，`--profile team` 可发文本/文件/群@）。地址指向哪个后端，就由哪个后端服务。', en: 'Loopback address of the WeChat sidecar; localhost only, never a public address. Fill by profile: personal (default) uses weixin-ilink-bridge on 9300 (Tencent iLink, free and cross-OS, personal-assistant DMs only); team uses weixin-db-bridge on 8788 (free wechatauto; read-only by default, `--profile team` enables text/files/group @). Whichever backend you point at serves this Source.' } },
   { key: 'tokenFile', type: 'text', label: { zh: '桥 token 文件', en: 'Bridge token file' },
     hint: { zh: '保存 sidecar bearer token 的文件路径；文件权限必须是 0600，否则客户端拒绝读取。', en: 'Path of the file holding the sidecar bearer token; it must have mode 0600 or the client refuses to read it.' } },
   { key: 'selfWxid', type: 'text', pattern: '^[A-Za-z0-9_\\-]+$', label: { zh: '本账号 wxid', en: 'This account wxid' },
@@ -243,9 +256,9 @@ const Fields: FieldSpec[] = [
   { key: 'images', type: 'switch', advanced: true, label: { zh: '接收图片', en: 'Receive images' },
     hint: { zh: '开启时图片会作为附件交给模型；关闭时只在文字里留「[图片]」占位，不下载任何字节。', en: 'On hands images to the model as attachments; off leaves a `[图片]` placeholder in the text and downloads nothing.' } },
   { key: 'bridgeLauncher', type: 'text', advanced: true, label: { zh: '桥启动器', en: 'Bridge launcher' },
-    hint: { zh: '本机用来启动微信 sidecar 的脚本绝对路径（.cmd / .bat）。三种后端各配一个启动器：start-wxbridge.cmd（wxauto-bridge，Windows 付费、群能力最全）、start-weixin-db.cmd（weixin-db-bridge，wechatauto 免费只读）、start-weixin-ilink.cmd（weixin-ilink-bridge，腾讯 iLink 跨 OS 个人助手）。插件只负责把它拉起来（后台、无窗口、脱离 DSH），脚本里写了什么由你决定——客户端库和本机 shim 都留在机器上，不进仓库。填了它就用它启动，比计划任务更直接；它启动哪个后端，就要和上面的「桥地址」指向同一个端口。', en: 'Absolute path of the script that starts the WeChat sidecar (a .cmd or .bat). One launcher per backend: start-wxbridge.cmd (wxauto-bridge, Windows, paid, fullest group support), start-weixin-db.cmd (weixin-db-bridge, free read-only wechatauto), start-weixin-ilink.cmd (weixin-ilink-bridge, Tencent iLink, cross-OS personal assistant). The plugin only launches it - detached, hidden, independent of DSH - and does not care what is inside: the client library and the machine shim stay out of the repository. With this set, Start runs it directly instead of the scheduled task; whichever backend it starts must use the same port as the Bridge URL above.' } },
+    hint: { zh: '本机用来启动微信 sidecar 的脚本绝对路径（.cmd / .bat）。两个 profile 各配一个启动器：personal 用 start-weixin-ilink.cmd（weixin-ilink-bridge，腾讯 iLink 跨 OS 个人助手，9300）；team 用 start-weixin-db.cmd（weixin-db-bridge，wechatauto 免费只读，8788）。插件只负责把它拉起来（后台、无窗口、脱离 DSH），脚本里写了什么由你决定——客户端库和本机 shim 都留在机器上，不进仓库。填了它就用它启动，比计划任务更直接；它启动哪个后端，就要和上面的「桥地址」指向同一个端口。', en: 'Absolute path of the script that starts the WeChat sidecar (a .cmd or .bat). One launcher per profile: personal uses start-weixin-ilink.cmd (weixin-ilink-bridge, Tencent iLink, cross-OS personal assistant, 9300); team uses start-weixin-db.cmd (weixin-db-bridge, free read-only wechatauto, 8788). The plugin only launches it - detached, hidden, independent of DSH - and does not care what is inside: the client library and the machine shim stay out of the repository. With this set, Start runs it directly instead of the scheduled task; whichever backend it starts must use the same port as the Bridge URL above.' } },
   { key: 'bridgeTask', type: 'text', advanced: true, label: { zh: '桥的计划任务', en: 'Bridge scheduled task' },
-    hint: { zh: '本机跑 wxauto-bridge 的 Windows 计划任务名。插件不自己拉起进程，只用「启动桥 / 停止桥」按钮让这个任务启停；因为桥必须跑在已登录的桌面会话里，且要活过 DSH 重启。', en: 'The Windows scheduled task that runs wxauto-bridge on this machine. The plugin never spawns it; the Start/Stop buttons ask this task to run or end it, because the bridge must live in the signed-in desktop session and outlive a DSH restart.' } },
+    hint: { zh: '本机运行微信 sidecar 的 Windows 计划任务名（personal / team 都可用，实际后端由启动器或该任务拉起）。插件不自己拉起进程，只用「启动桥 / 停止桥」按钮让这个任务启停；因为桥必须跑在已登录的桌面会话里，且要活过 DSH 重启。', en: 'The Windows scheduled task that runs the WeChat sidecar on this machine (works for both personal and team; the launcher or this task actually starts the backend). The plugin never spawns it; the Start/Stop buttons ask this task to run or end it, because the bridge must live in the signed-in desktop session and outlive a DSH restart.' } },
   { key: 'pollSeconds', type: 'number', advanced: true, min: 5, max: 3600, label: { zh: '轮询间隔 / 秒', en: 'Poll interval / s' },
     hint: { zh: '轮询传输向桥询问新消息的间隔。', en: 'How often the polling transport asks the bridge for new messages.' } },
   { key: 'readPageSize', type: 'number', advanced: true, min: 1, max: 50, label: { zh: '每页消息数', en: 'Messages per page' },
@@ -332,7 +345,7 @@ export function createWeixinKind(hooks: WeixinKindHooks = {}): SourceKind<Weixin
         ] },
       { key: 'syncChat', type: 'text', pattern: '^[A-Za-z0-9_\-]*$', label: { zh: '同步来源群', en: 'Sync from group' },
         choose: { zh: '不同步', en: 'Do not sync' },
-        hint: { zh: '选一个群，再点「立即同步」，把它的人加进上面的名单，省得一个个手填。能否拿到完整名册取决于后端：wxautox4 没有群成员表接口，只能给出「在这个群里发过言的人」，所以同步是「加人不删人」——群里有谁没说过话，就不会被同步进来，需要时手动添加。它不读聊天内容，也不改变「接收的群」。',
+        hint: { zh: '选一个群，再点「立即同步」，把它的人加进上面的名单，省得一个个手填。能否拿到完整名册取决于后端：team 的 weixin-db-bridge 能给出全量名册；personal 的 weixin-ilink-bridge 只做单聊、没有群名册。名册不全时同步只「加人不删人」——群里有谁没说过话就不会被同步进来，需要时手动添加。它不读聊天内容，也不改变「接收的群」。',
           en: 'Pick a group and press Sync now: its members are read into the list above, marked as coming from a group, so you do not add them one by one. It reads the member roster only - no message content - and does not change the groups you receive; people you marked as direct are kept.' },
       },
     ],
@@ -372,7 +385,7 @@ export function createWeixinKind(hooks: WeixinKindHooks = {}): SourceKind<Weixin
         if (members.length === 0) {
           throw new Error(roster === 'full'
             ? '这个群里没有读到任何成员，请确认群的 ID 正确。'
-            : '这个后端拿不到群成员名册（wxautox4 只提供「在这个群里发过言的人」），而这个群还没有人发过言。让成员在群里说一句再同步，或在上面手动添加。')
+            : '这个后端拿不到群成员名册（只有 team 的 weixin-db-bridge 提供全量名册），而这个群还没有人发过言。让成员在群里说一句再同步，或在上面手动添加。')
         }
         // A roster backend can replace what it wrote last time; an observed one can only add.
         return { ...part, allowed: mergeSynced(part.allowed, members, roster === 'full' ? 'replace' : 'union') }
@@ -498,7 +511,7 @@ export function createWeixinKind(hooks: WeixinKindHooks = {}): SourceKind<Weixin
      */
     actions: [
       { id: 'bridge.start', label: { zh: '启动桥', en: 'Start bridge' },
-        hint: { zh: '让本机计划任务启动 wxauto-bridge。需要微信客户端已登录，且这台机器上没有别的 UI 自动化客户端。', en: 'Asks the machine task to start wxauto-bridge. The WeChat client must be signed in, and no other UI-automation client may run.' },
+        hint: { zh: '让本机计划任务或启动器启动微信桥。需要对应后端就绪：personal=iLink 已扫码存好凭证，team=桌面微信 4.1.12+ 已登录。', en: 'Asks the machine task or launcher to start the WeChat bridge. Needs the matching backend ready: personal = iLink QR credential saved, team = signed-in desktop WeChat 4.1.12+.' },
         ready: config => !!launcherOf(config) || !!config.bridgeTask,
         run: async (host, config, signal) => {
           const pid = startLauncher(config)

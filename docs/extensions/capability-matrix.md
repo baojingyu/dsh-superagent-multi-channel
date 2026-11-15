@@ -26,24 +26,24 @@ this bundle's additions. ✅ present · ➖ not applicable to the platform · �
 | Message deep link | ✅ AppLink | ✅ issue/PR URL | ❌ | ❌ | ❌ | ✅ item page |
 | Multiple instances | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
-## WeChat's three backends (wxauto / pc-db / iLink)
+## WeChat's two profiles (personal / team) + optional non-default wxauto
 
-The **WeChat** column above is the **`wxauto-bridge` (`pc-uia` / wxautox4)** baseline. Behind the one WeChat kind sit three interchangeable backends; they differ as follows (✅ present · ⚠️ conditional · ❌ absent / not applicable):
+The **WeChat** column above describes the WeChat source's general capability surface. What ships is **two profiles** (the `profile` field), default `personal`; `wxauto-bridge` (`pc-uia` / wxautox4) and `gate-guard` are **non-default, not bundled** optional external backends, shown only in the last column for reference (✅ present · ⚠️ conditional · ❌ absent / not applicable).
 
-| Capability | `wxauto-bridge` (pc-uia, wxautox4) | `weixin-db-bridge` (pc-db, wechatauto-replica) | `weixin-ilink-bridge` (ilink, Tencent iLink Bot) |
+| Capability | `personal` (**default**) = `weixin-ilink-bridge` (ilink) | `team` = `weixin-db-bridge` (pc-db / wechatauto-replica) | (optional, not bundled) `wxauto-bridge` (pc-uia / wxautox4) |
 | --- | --- | --- | --- |
-| OS / cost | Windows only; **needs a wxautox4 commercial licence** | Windows only; **free** (Apache-2.0) | **any OS (no desktop WeChat)**; **free** |
-| Groups / DMs | ✅ groups + DMs | ✅ groups + DMs | ⚠️ **DMs only** (no group chats, no group roster) |
-| Structured `@` | ⚠️ `markup` (client markup; rename/paste can forge) | ❌ `none` (`ats` always empty; rely on Policy/keywords) | ❌ `none` (`ats` always empty) |
-| Group roster | ⚠️ `observed` (only those who spoke) | ✅ `full` (full roster) | ⚠️ `observed` (peer only) |
-| History backfill | ⚠️ UI scroll catch-up (last 20) | ✅ full DB history, pageable | ❌ realtime only |
-| Inbound images / media | ✅ build-dependent `download()` | ✅ when `MediaDownloader` is available | ✅ CDN download + AES decrypt |
-| Outbound send | ✅ text/files/voice; keyed idempotency | ⚠️ **read-only 501 by default**; `--allow-send` to send | ✅ text (echoes `context_token`); keyed idempotency |
-| Realtime listening | ✅ `AddListenChat + StartListening` (drives the UI) | ❌ no listener; read-only DB + optional UIA send | ✅ long-poll `getUpdates` (no UI) |
-| 4.1.12.55 finding | ⚠️ cold-start gate=0 attach fails; needs hot-activation + licence + retest | ✅ DB read-only all pass; **recommended for production** | ✅ client-version independent |
-| Exclusion with others | shares the one desktop UI with pc-db's send path (one at a time) | read-only can run in parallel; exclusion only with `--allow-send` | no UI dependency, parallel-capable (Bot identity; no double-send) |
+| OS / cost | **any OS (no desktop WeChat)**; **free** (official iLink) | Windows only (WeChat **4.1.12+**); **free** (Apache-2.0) | Windows only; **needs a wxautox4 commercial licence** |
+| Groups / DMs | ⚠️ **DMs only** (no groups, no roster, no `@`) | ✅ groups + DMs (DB-read group trigger) | ✅ groups + DMs |
+| Inbound structured `@` | ❌ `none` | ❌ `none` (`ats` always empty; rely on Policy/keywords) | ⚠️ `markup` (client markup; forgeable) |
+| Group roster | ⚠️ `observed` (peer only) | ✅ `full` (full roster) | ⚠️ `observed` (only those who spoke) |
+| History backfill | ❌ realtime only | ✅ full DB history, pageable | ⚠️ UI scroll catch-up |
+| Inbound images / media | ✅ CDN + AES decrypt | ✅ when `MediaDownloader` is available | ✅ build-dependent `download()` |
+| Outbound send | ✅ text (echoes `context_token`), keyed idempotency | ✅ text / file / group-`@` (needs `--profile team`; via `wechatauto` UIA/OCR); read-only 501 by default | ✅ text/files/voice/`@` |
+| Voice / Moments / friends / create-group | ➖ (DM assistant) | ❌ **none** (voice/Moments/friend/create-group not wired, not claimed) | ✅ build-dependent |
+| Receive / trigger | long-poll `getUpdates` | DB-read trigger (Node polls `/messages`; `/listen` does not drive the UI) | listener callback (drives the desktop UI) |
+| 4.1.12.55 | ✅ client-version independent | ✅ DB read all pass, production-ready; send needs full UIA | ⚠️ cold-start gate=0 attach fails; needs hot-activation + licence + retest |
 
-**4.1.12.55 finding**: this build turns the WeChat 4.x Qt accessibility gate off by default (the `mmui` tree is not materialised on a cold start). `wechatauto` ships hot activation, so pc-db's DB read-only passes fully on 4.1.12.55 and **can go to production**; `wxautox4` has no hot activation, so pc-uia fails to attach on a cold start and only works after the gate is hot-activated — **conditionally usable** (see `docs/research/compat-4.1.12.55.md`). Startup, exclusion and the full version matrix are in `sidecar/README.md`.
+**4.1.12.55 finding**: this build turns the WeChat 4.x Qt accessibility gate off by default (the `mmui` tree is not materialised on a cold start). `wechatauto` ships hot activation, so **`team` (replica)'s DB read passes fully on 4.1.12.55 and is production-ready**, and its `--profile team` send goes through UIA/OCR; `personal` (iLink) is client-version independent; `wxautox4` has no hot activation and fails to attach on a cold start, so it is not a release backend (see `docs/research/compat-4.1.12.55.md`). Startup, exclusion and version requirements are in `sidecar/README.md`.
 
 ## Platform limits, and why they are not bugs
 

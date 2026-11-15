@@ -1,13 +1,23 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""weixin-db-bridge —— 微信 4.x 本地数据库只读 sidecar（契约见 ../wxauto-bridge/contract.md）。
+"""weixin-db-bridge —— 微信 4.x 本地数据库 sidecar（契约见 ../wxauto-bridge/contract.md）。
 
 后端名固定为 ``pc-db``：不注入进程、不驱动 UIAutomation，只读取微信 4.x 的
 SQLCipher 本地库（contact.db / session.db / message_N.db）来回答会话、成员、
-消息与图片。发送默认走只读语义（``POST /send`` 返回 501），除非显式
-``--allow-send``。监听是拉取式的：``/messages`` 由 Node 轮询直接读库，``/listen``
-只做「认不认得这些会话」的应答，绝不 ``AddListenChat``/``StartListening``，
-因此不会抢占微信窗口。
+消息与图片。
+
+运行档位（``--profile``）：
+
+* ``readonly``（默认）：只读。``POST /send`` 恒 501；``/listen`` 只做「认不认得
+  这些会话」的应答，绝不 ``AddListenChat``/``StartListening``。
+* ``team``（``--profile team`` / ``--team``）：全量模式。``allow_send`` 自动打开，
+  ``POST /send`` 走 ``wechatauto.Chat.SendMsg`` / ``SendFiles``，支持 text、
+  files（文件绝对路径列表，另兼容 Node 契约的 base64 ``file``）、at（群成员
+  昵称/ID，不要求 AtAll）。监听仍是拉取式：``/listen`` 只记录房间供 Node 轮询
+  ``/messages``（DB 触发），不 ``AddListenChat``/``StartListening``，不抢 UI。
+
+无论哪个档位，监听都是拉取式的：``/messages`` 由 Node 轮询直接读库，``/listen``
+只记录/应答，绝不 ``AddListenChat``/``StartListening``，因此不会抢占微信窗口。
 
 设计要点（与 contract.md 严格对齐）：
   * 纯标准库 ``ThreadingHTTPServer`` 提供 HTTP/1.1 + JSON；``wechatauto`` 惰性导入。
@@ -20,13 +30,16 @@ SQLCipher 本地库（contact.db / session.db / message_N.db）来回答会话�
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import hmac
 import json
 import os
 import re
+import shutil
 import struct
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -195,6 +208,33 @@ def native_id_for(username: str, shard: str, local_id) -> str:
     return "%s_%s_%s" % (chat, sh, local_id)
 
 
+def _normalize_at_entries(raw) -> list:
+    """``payload.at`` → 供发送用的字符串列表；接受单个字符串或字符串数组。
+
+    群成员可能以昵称或 wxid 传入，这里只做形态归一，真正解析到显示名在
+    :meth:`WeixinDbBackend._resolve_at_names` 里按群成员表完成。
+    """
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        return [raw.strip()] if raw.strip() else []
+    if isinstance(raw, (list, tuple)):
+        out = []
+        for item in raw:
+            if isinstance(item, str) and item.strip():
+                out.append(item.strip())
+        return out
+    raise BadRequest("at must be a string or a string array")
+
+
+def _safe_file_name(name) -> str:
+    """把上传文件名压成安全 basename（去目录、去异常字符），避免目录穿越。"""
+    base = os.path.basename(str(name or "").replace("\\", "/")).strip()
+    base = re.sub(r"[^\w.\- ]+", "_", base)
+    return base[:128] or "upload.bin"
+
+
+
 # --------------------------------------------------------------------------- 后端基类
 
 
@@ -264,8 +304,9 @@ class FakeBackend(BackendBase):
 
     name = BACKEND_NAME
 
-    def __init__(self, allow_send: bool = False) -> None:
+    def __init__(self, allow_send: bool = False, profile: str = "readonly") -> None:
         self.allow_send = allow_send
+        self.profile = profile or "readonly"
         self._png = make_png()
         self._send_cache: "OrderedDict[str, str]" = OrderedDict()
         self._media_ids = set()
@@ -288,7 +329,7 @@ class FakeBackend(BackendBase):
         self._nicks = {wxid: name for wxid, name in FAKE_MEMBERS}
 
     def capabilities(self):
-        return {"mentions": "none", "members": "full", "media": True}
+        return {"mentions": "none", "members": "full", "media": True, "send": bool(self.allow_send)}
 
     def status(self):
         return {
@@ -345,18 +386,38 @@ class FakeBackend(BackendBase):
             return self._png, "image/png"
         raise NotFound(media_id)
 
+    def _fake_files(self, payload):
+        raw = payload.get("files")
+        if raw is None:
+            return []
+        if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
+            raise BadRequest("files must be a string array of absolute paths")
+        return list(raw)
+
     def send(self, payload):
         if not self.allow_send:
-            raise Unsupported("read-only backend: sending is not supported (start with --allow-send to enable)")
+            raise Unsupported(
+                "read-only backend: sending is not supported (start with --profile team or --allow-send to enable)")
+        room = str(payload.get("room") or "")
+        text = str(payload.get("text") or "")
+        files = self._fake_files(payload)
+        ats = _normalize_at_entries(payload.get("at"))
+        if not text.strip() and not files:
+            raise BadRequest("text and files are both empty")
+        known = {"", FAKE_GROUP_ID, FAKE_GROUP_NAME, FAKE_SINGLE_ID, FAKE_SINGLE_NAME}
+        if room and room not in known:
+            raise NotFound(room)
         key = payload.get("idempotencyKey") or ""
         if key and key in self._send_cache:
-            return {"msgId": self._send_cache[key], "deduped": True}
+            return {"msgId": self._send_cache[key], "deduped": True,
+                    "room": room, "text": text, "files": files, "at": ats}
         msg_id = "fake_" + os.urandom(5).hex()
         if key:
             self._send_cache[key] = msg_id
             while len(self._send_cache) > 256:
                 self._send_cache.popitem(last=False)
-        return {"msgId": msg_id, "deduped": False}
+        return {"msgId": msg_id, "deduped": False,
+                "room": room, "text": text, "files": files, "at": ats}
 
     def listen(self, rooms, options):
         known = {FAKE_GROUP_ID: FAKE_GROUP_NAME, FAKE_GROUP_NAME: FAKE_GROUP_NAME,
@@ -470,15 +531,16 @@ def _load_wechatauto(wechatauto_path: str):
 
 
 class WeixinDbBackend(BackendBase):
-    """``pc-db``：读微信 4.x 本地 SQLCipher 库，只读。"""
+    """``pc-db``：读微信 4.x 本地 SQLCipher 库；team 档位额外提供发送。"""
 
     name = BACKEND_NAME
 
-    def __init__(self, db_dir=None, account=None, allow_send=False,
+    def __init__(self, db_dir=None, account=None, allow_send=False, profile="readonly",
                  media_ttl=DEFAULT_MEDIA_TTL_S, wechatauto_path="", verbose=False):
         self._db_dir = db_dir
         self._account = account
         self.allow_send = allow_send
+        self.profile = profile or "readonly"
         self._media_ttl = max(0.0, float(media_ttl))
         self._wechatauto_path = wechatauto_path or os.environ.get("WECHATAUTO_PATH", "")
         self.verbose = verbose
@@ -492,6 +554,8 @@ class WeixinDbBackend(BackendBase):
         self._index_at = 0.0
         self._media_ctx: "OrderedDict[str, tuple]" = OrderedDict()
         self._media_bytes: "OrderedDict[str, tuple]" = OrderedDict()
+        self._chat = None            # 复用的发送通道（wechatauto.Chat），惰性创建
+        self._send_lock = threading.Lock()
 
     # -- 初始化 -----------------------------------------------------------
     def _ensure(self):
@@ -534,7 +598,8 @@ class WeixinDbBackend(BackendBase):
             media = self._media is not None
         except Unavailable:
             media = False
-        return {"mentions": "none", "members": "full", "media": media}
+        return {"mentions": "none", "members": "full", "media": media,
+                "send": bool(self.allow_send)}
 
     # -- 身份与会话索引 ---------------------------------------------------
     @property
@@ -762,26 +827,136 @@ class WeixinDbBackend(BackendBase):
         return data, mime
 
     # -- 发送 / 监听 ------------------------------------------------------
+    def _send_chat(self):
+        """惰性创建并复用发送通道 ``wechatauto.Chat``（team 档位需要完整 UIA 栈）。"""
+        if self._chat is not None:
+            return self._chat
+        try:
+            from wechatauto import Chat  # noqa: PLC0415
+        except Exception as error:  # noqa: BLE001
+            raise Unavailable(
+                "发送能力不可用（wechatauto 完整包未安装/导入失败，team 模式需要 UIA 栈）：%s"
+                % short_error(error))
+        db = self._ensure()
+        try:
+            chat = Chat(who="", db=db)
+        except Exception as error:  # noqa: BLE001
+            raise Unavailable("发送通道初始化失败（微信窗口未就绪？）：%s" % short_error(error))
+        self._chat = chat
+        return chat
+
+    def _materialize_files(self, payload):
+        """``payload.files``（绝对路径列表）+ ``payload.file``（base64 单文件）→ (paths, tmpdir)。
+
+        真实后端要求 ``files`` 里的路径存在（缺失即 400）；base64 文件写到私有临时
+        目录，发送后由调用方清理。返回的 tmpdir 为 None 表示没有 base64 文件。
+        """
+        paths = []
+        raw = payload.get("files")
+        if raw is not None:
+            if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
+                raise BadRequest("files must be a string array of absolute paths")
+            for item in raw:
+                if not item:
+                    continue
+                absolute = os.path.abspath(item)
+                if not os.path.isfile(absolute):
+                    raise BadRequest("file not found: %s" % item)
+                paths.append(absolute)
+        fobj = payload.get("file")
+        tmpdir = None
+        if fobj is not None:
+            if not isinstance(fobj, dict):
+                raise BadRequest("file must be an object {name,data}")
+            data_b64 = fobj.get("data")
+            if not isinstance(data_b64, str) or not data_b64:
+                raise BadRequest("file.data must be base64 text")
+            try:
+                blob = base64.b64decode(data_b64, validate=True)
+            except (ValueError, TypeError):
+                raise BadRequest("file.data is not valid base64")
+            tmpdir = tempfile.mkdtemp(prefix="weixin-db-send-")
+            path = os.path.join(tmpdir, _safe_file_name(fobj.get("name") or "upload.bin"))
+            with open(path, "wb") as handle:
+                handle.write(blob)
+            paths.append(path)
+        return paths, tmpdir
+
+    def _resolve_at_names(self, username, entries):
+        """把 at 的成员昵称/ID 解析成群成员显示名（供 guia.at_member 的 OCR 命中）。"""
+        try:
+            roster = self.members(username)
+        except Exception:  # noqa: BLE001
+            roster = []
+        by_id = {m["id"]: m["name"] for m in roster if m.get("id")}
+        by_name = {m["name"]: m["name"] for m in roster if m.get("name")}
+        out = []
+        for entry in entries:
+            if entry in by_id:
+                out.append(by_id[entry])
+            elif entry in by_name:
+                out.append(by_name[entry])
+            else:
+                out.append(entry)
+        return out
+
+    @staticmethod
+    def _require_ok(resp, prefix):
+        """把 ``WxResponse`` 的失败状态转成 502；成功则什么都不做。"""
+        if resp is None:
+            raise Unavailable(prefix + "：无返回")
+        status = resp.get("status") if isinstance(resp, dict) else getattr(resp, "status", None)
+        message = resp.get("message") if isinstance(resp, dict) else getattr(resp, "message", "")
+        if status != "成功":
+            raise Unavailable("%s：%s" % (prefix, message or status or "未知错误"))
+
+    def _dispatch_text(self, chat, text, target, at_names):
+        try:
+            if at_names:
+                first, extra = at_names[0], at_names[1:]
+                body = text if not extra else text + " " + " ".join("@" + name for name in extra)
+                resp = chat.SendMsg(body, who=target, at=first)
+            else:
+                resp = chat.SendMsg(text, who=target)
+        except Exception as error:  # noqa: BLE001
+            raise Unavailable("发送文本失败：%s" % short_error(error))
+        self._require_ok(resp, "发送文本失败")
+
+    def _dispatch_files(self, chat, files, target):
+        try:
+            resp = chat.SendFiles(files, who=target)
+        except Exception as error:  # noqa: BLE001
+            raise Unavailable("发送文件失败：%s" % short_error(error))
+        self._require_ok(resp, "发送文件失败")
+
     def send(self, payload):
         if not self.allow_send:
-            raise Unsupported("read-only backend: sending is not supported (start with --allow-send to enable)")
+            raise Unsupported(
+                "read-only backend: sending is not supported (start with --profile team or --allow-send to enable)")
         room = str(payload.get("room") or "")
         wxid = str(payload.get("wxid") or "")
         text = str(payload.get("text") or "")
-        if not text:
-            raise BadRequest("text is empty")
+        at_entries = _normalize_at_entries(payload.get("at"))
+        files, tmpdir = self._materialize_files(payload)
         try:
-            from wechatauto.guia import quick_send  # noqa: PLC0415
-        except Exception as error:  # noqa: BLE001
-            raise Unavailable("发送能力不可用（wechatauto.guia 未安装/导入失败）：%s" % short_error(error))
-        username, _kind = self._resolve_room(room)
-        if room and username is None:
-            raise NotFound(room)
-        target = wxid or username or room
-        try:
-            quick_send(text, target)
-        except Exception as error:  # noqa: BLE001
-            raise Unavailable("发送失败：%s" % short_error(error))
+            if not text.strip() and not files:
+                raise BadRequest("text and files are both empty")
+            username, kind = self._resolve_room(room)
+            if room and username is None:
+                raise NotFound(room)
+            target = wxid or username or room
+            at_names = []
+            if at_entries and (kind == "group" or (username or "").endswith("@chatroom")):
+                at_names = self._resolve_at_names(username or room, at_entries)
+            chat = self._send_chat()
+            with self._send_lock:
+                if text.strip():
+                    self._dispatch_text(chat, text, target, at_names)
+                if files:
+                    self._dispatch_files(chat, files, target)
+        finally:
+            if tmpdir:
+                shutil.rmtree(tmpdir, ignore_errors=True)
         return {"msgId": "pc-db_" + os.urandom(5).hex(), "deduped": False}
 
     def listen(self, rooms, options):
@@ -805,11 +980,12 @@ class WeixinDbBackend(BackendBase):
                 added.append(name)
         removed = [rid for rid in prev if rid not in now_ids]
         self._listening_ids = now_ids
-        # 只读后端是拉取式：这里不 AddListenChat / 不 StartListening，绝不抢微信窗口。
+        # 拉取式监听：无论 readonly 还是 team，这里都只记录/应答，不 AddListenChat /
+        # 不 StartListening——群触发走 Node 轮询 /messages 读库，绝不抢微信窗口。
         return {"listening": listening, "added": added, "removed": removed, "failed": failed}
 
     def close(self):
-        pass
+        self._chat = None
 
 
 # --------------------------------------------------------------------------- HTTP 层
@@ -1020,11 +1196,20 @@ class BridgeHandler(BaseHTTPRequestHandler):
 # --------------------------------------------------------------------------- 入口
 
 
+def _profile_of(args) -> str:
+    """解析运行档位：``--profile team`` 或 ``--team`` 别名 → team，否则 readonly。"""
+    if getattr(args, "profile", "readonly") == "team" or getattr(args, "team", False):
+        return "team"
+    return "readonly"
+
+
 def build_backend(args) -> BackendBase:
+    profile = _profile_of(args)
+    allow_send = bool(getattr(args, "allow_send", False) or profile == "team")
     if args.fake:
-        return FakeBackend(allow_send=args.allow_send)
+        return FakeBackend(allow_send=allow_send, profile=profile)
     return WeixinDbBackend(
-        db_dir=args.db_dir, account=args.account, allow_send=args.allow_send,
+        db_dir=args.db_dir, account=args.account, allow_send=allow_send, profile=profile,
         media_ttl=args.media_cache_ttl, wechatauto_path=args.wechatauto_path,
         verbose=args.verbose,
     )
@@ -1059,7 +1244,10 @@ def parse_args(argv=None):
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="监听端口（默认 %d）" % DEFAULT_PORT)
     parser.add_argument("--token", default="", help="Bearer token（也可用 WXBRIDGE_TOKEN / WEIXIN_DB_TOKEN）")
     parser.add_argument("--fake", action="store_true", help="使用确定性 fake 后端（无需微信，供自测）")
-    parser.add_argument("--allow-send", action="store_true", help="允许通过 wechatauto.guia 发送（默认只读 501）")
+    parser.add_argument("--profile", choices=("readonly", "team"), default="readonly",
+                        help="运行档位：readonly（默认，只读）/ team（DB 触发 + 文本/文件/@ 发送）")
+    parser.add_argument("--team", action="store_true", help="等价 --profile team（team 全量模式）")
+    parser.add_argument("--allow-send", action="store_true", help="允许发送（team 档位已隐含；默认只读 501）")
     parser.add_argument("--allow-remote", action="store_true", help="允许绑定非回环地址")
     parser.add_argument("--db-dir", default=None, help="微信数据根目录（默认自动探测）")
     parser.add_argument("--account", default=None, help="指定账号目录名（默认按最近活动/密钥校验选择）")
@@ -1075,8 +1263,9 @@ def main(argv=None):
     token = resolve_token(args)
     server = make_server(args, token=token)
     # token 值绝不打印：只说「已设置」。
-    sys.stderr.write("[weixin-db-bridge] backend=%s fake=%s token=set listening on http://%s:%d\n"
-                     % (server.backend.name, args.fake, args.host, args.port))
+    sys.stderr.write("[weixin-db-bridge] backend=%s profile=%s fake=%s token=set listening on http://%s:%d\n"
+                     % (server.backend.name, getattr(server.backend, "profile", "readonly"),
+                        args.fake, args.host, args.port))
     if not args.fake:
         available, detail = server.backend.probe()
         if available:

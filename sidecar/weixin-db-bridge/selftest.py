@@ -64,19 +64,34 @@ def request(method, path, token=TOKEN, body=None, raw=False):
         return error.code, parsed, error.headers
 
 
-def main():
-    global BASE_URL
-    args = bridge.parse_args(["--fake", "--port", "0", "--token", TOKEN, "--quiet"])
+def _serve(argv):
+    """在进程内起一个 fake 后端，返回 (httpd, base_url)。"""
+    args = bridge.parse_args(argv)
     httpd = bridge.make_server(args, token=TOKEN, port=0)
     port = httpd.server_address[1]
-    BASE_URL = "http://127.0.0.1:%d" % port
-    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
-    thread.start()
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd, "http://127.0.0.1:%d" % port
+
+
+def main():
+    global BASE_URL
+    # 1) 只读档位（默认）：原有 54 项契约检查，/send 必须 501。
+    readonly, readonly_url = _serve(["--fake", "--port", "0", "--token", TOKEN, "--quiet"])
+    BASE_URL = readonly_url
     try:
         run_checks()
     finally:
-        httpd.shutdown()
-        httpd.server_close()
+        readonly.shutdown()
+        readonly.server_close()
+
+    # 2) team 档位：验证 text/files/at 发送、/listen 200，只读 501 已在上面覆盖。
+    team, team_url = _serve(["--fake", "--port", "0", "--token", TOKEN, "--quiet", "--profile", "team"])
+    BASE_URL = team_url
+    try:
+        run_team_checks()
+    finally:
+        team.shutdown()
+        team.server_close()
 
     sys.stdout.write("\n%d checks, %d failure(s)\n" % (CHECKS, len(FAILURES)))
     if FAILURES:
@@ -207,6 +222,60 @@ def run_checks():
     check("bad JSON -> 400", status == 400 and body.get("error") == "bad_request", (status, body))
     status, body, _ = request("POST", "/listen", body={"rooms": "not-a-list"})
     check("listen bad rooms -> 400", status == 400 and body.get("error") == "bad_request", (status, body))
+
+
+def run_team_checks():
+    """team 全量档位：--profile team 下 /send 支持 text/files/at，/listen 记录房间。"""
+    # --- 能力自述：send=true -------------------------------------------
+    status, body, _ = request("GET", "/health")
+    check("team health 200", status == 200, status)
+    caps = body.get("capabilities") or {}
+    check("team capabilities send=true", caps.get("send") is True, caps)
+
+    # --- /send text -----------------------------------------------------
+    status, body, _ = request("POST", "/send", body={"room": bridge.FAKE_GROUP_ID, "text": "团队模式你好"})
+    check("team send text 200", status == 200, (status, body))
+    check("team send text msgId", isinstance(body.get("msgId"), str) and body["msgId"], body)
+    check("team send text echo", body.get("text") == "团队模式你好", body)
+
+    # --- /send files（绝对路径列表）-----------------------------------
+    files = ["C:\\tmp\\report.pdf", "C:\\tmp\\chart.png"]
+    status, body, _ = request("POST", "/send", body={"room": bridge.FAKE_GROUP_ID, "files": files})
+    check("team send files 200", status == 200, (status, body))
+    check("team send files echo", body.get("files") == files, body)
+
+    # --- /send at（昵称列表）------------------------------------------
+    status, body, _ = request("POST", "/send", body={"room": bridge.FAKE_GROUP_ID, "text": "开会", "at": ["阿黎"]})
+    check("team send at 200", status == 200, (status, body))
+    check("team send at echo", body.get("at") == ["阿黎"], body)
+
+    # --- /send at（单个字符串 / wxid）--------------------------------
+    status, body, _ = request("POST", "/send", body={"room": bridge.FAKE_GROUP_ID, "text": "@", "at": "wxid_fake_alice"})
+    check("team send at string 200", status == 200 and body.get("at") == ["wxid_fake_alice"], (status, body))
+
+    # --- /send 组合 text+files+at + 幂等 ------------------------------
+    payload = {"room": bridge.FAKE_GROUP_ID, "text": "x", "files": ["C:\\tmp\\a.txt"], "at": ["王博"],
+               "idempotencyKey": "team-k1"}
+    status, body, _ = request("POST", "/send", body=payload)
+    check("team send combined 200", status == 200 and body.get("deduped") is False, (status, body))
+    _, body2, _ = request("POST", "/send", body=payload)
+    check("team send idempotent dedupe",
+          body2.get("deduped") is True and body2.get("msgId") == body.get("msgId"), (body, body2))
+
+    # --- /send 校验错误 -------------------------------------------------
+    status, body, _ = request("POST", "/send", body={"room": bridge.FAKE_GROUP_ID})
+    check("team send empty -> 400", status == 400 and body.get("error") == "bad_request", (status, body))
+    status, body, _ = request("POST", "/send", body={"room": bridge.FAKE_GROUP_ID, "files": "not-a-list"})
+    check("team send bad files -> 400", status == 400 and body.get("error") == "bad_request", (status, body))
+    status, body, _ = request("POST", "/send", body={"room": "chatroom_missing", "text": "hi"})
+    check("team send unknown room -> 404", status == 404 and body.get("error") == "not_found", (status, body))
+
+    # --- /listen（team 也只记录、不抢 UI）-----------------------------
+    status, body, _ = request("POST", "/listen", body={"rooms": [bridge.FAKE_GROUP_ID, bridge.FAKE_SINGLE_ID]})
+    check("team listen 200", status == 200, (status, body))
+    ids = {room["id"] for room in (body.get("listening") or [])}
+    check("team listen records rooms",
+          bridge.FAKE_GROUP_ID in ids and bridge.FAKE_SINGLE_ID in ids, body)
 
 
 def set_event_room(event):

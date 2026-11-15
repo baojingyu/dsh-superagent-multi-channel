@@ -25,24 +25,24 @@
 | 消息深链 | ✅ AppLink | ✅ issue/PR URL | ❌ | ❌ | ❌ | ✅ 工作项页面 |
 | 多实例 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
-## 微信三后端差异（wxauto / pc-db / iLink）
+## 微信两个 profile（personal / team）+ 可选非默认 wxauto
 
-上表的「微信」列以 **`wxauto-bridge`（`pc-uia` / wxautox4）** 为基线。微信同一个 kind 背后有三种可替换后端，差异如下（✅ 具备 · ⚠️ 有条件 · ❌ 不具备 / 不适用）：
+上表的「微信」列描述微信来源的通用能力面。实际发布为**两个 profile**（`profile` 字段），默认 `personal`；`wxauto-bridge`（`pc-uia` / wxautox4）与 `gate-guard` 是**非默认、不随包发布**的可选外部后端，仅在最后一列作对照（✅ 具备 · ⚠️ 有条件 · ❌ 不具备 / 不适用）。
 
-| 能力 | `wxauto-bridge`（pc-uia，wxautox4） | `weixin-db-bridge`（pc-db，wechatauto-replica） | `weixin-ilink-bridge`（ilink，腾讯 iLink Bot） |
+| 能力 | `personal`（**默认**）= `weixin-ilink-bridge`（ilink） | `team` = `weixin-db-bridge`（pc-db / wechatauto-replica） | （可选，不随包发布）`wxauto-bridge`（pc-uia / wxautox4） |
 | --- | --- | --- | --- |
-| OS / 费用 | 仅 Windows；**需 wxautox4 商业授权** | 仅 Windows；**免费**（Apache-2.0） | **任意 OS（无需桌面微信）**；**免费** |
-| 群 / 私聊 | ✅ 群 + 私聊 | ✅ 群 + 私聊 | ⚠️ **仅单聊**（无群会话、无群成员表） |
-| 结构化 `@` | ⚠️ `markup`（客户端标记，改名/粘贴可伪造） | ❌ `none`（`ats` 恒空，靠 Policy/关键词准入） | ❌ `none`（`ats` 恒空） |
-| 群成员名册 | ⚠️ `observed`（只见发过言的人） | ✅ `full`（全量名册） | ⚠️ `observed`（仅对端） |
-| 历史回填 | ⚠️ UI 滚动补读（最近 20 条） | ✅ 全量 DB 历史、可分页 | ❌ 仅实时 |
-| 入站图片 / 媒体 | ✅ 取决于构建 `download()` | ✅ `MediaDownloader` 可用时 | ✅ CDN 下载 + AES 解密 |
-| 出站发送 | ✅ 文本/文件/语音；keyed 幂等 | ⚠️ **默认只读 501**；`--allow-send` 才发 | ✅ 文本（回传 `context_token`）；keyed 幂等 |
-| 实时监听 | ✅ `AddListenChat + StartListening`（会抢窗口） | ❌ 不监听；只读库 + 可选 UIA 发送 | ✅ 长轮询 `getUpdates`（无 UI） |
-| 4.1.12.55 结论 | ⚠️ 冷启动 gate=0 attach 失败，需热激活+授权+复测 | ✅ DB 只读全通，**推荐直接上生产** | ✅ 与客户端版本无关 |
-| 与其它后端互斥 | 与 pc-db 的发送路径抢同一桌面 UI（同时只有一个） | 只读可并行；`--allow-send` 时才互斥 | 无 UI 依赖，可并行（Bot 身份，不能双发） |
+| OS / 费用 | **任意 OS（无需桌面微信）**；**免费**（官方 iLink） | 仅 Windows（微信 **4.1.12+**）；**免费**（Apache-2.0） | 仅 Windows；**需 wxautox4 商业授权** |
+| 群 / 私聊 | ⚠️ **仅单聊**（无群、无群成员表、无 @） | ✅ 群 + 私聊（DB 读库触发群消息） | ✅ 群 + 私聊 |
+| 入站结构化 `@` | ❌ `none` | ❌ `none`（`ats` 恒空，靠 Policy/关键词准入） | ⚠️ `markup`（客户端标记，可伪造） |
+| 群成员名册 | ⚠️ `observed`（仅对端） | ✅ `full`（全量名册） | ⚠️ `observed`（只见发过言的人） |
+| 历史回填 | ❌ 仅实时 | ✅ 全量 DB 历史、可分页 | ⚠️ UI 滚动补读 |
+| 入站图片 / 媒体 | ✅ CDN + AES 解密 | ✅ `MediaDownloader` 可用时 | ✅ 取决于构建 `download()` |
+| 出站发送 | ✅ 文本（回传 `context_token`），keyed 幂等 | ✅ 文本 / 文件 / 群 @（需 `--profile team`；走 `wechatauto` UIA/OCR）；默认只读 `501` | ✅ 文本/文件/语音/@ |
+| 语音 / 朋友圈 / 好友 / 建群 | ➖（单聊助手） | ❌ **均不支持**（voice/Moments/friend/create-group 未接入，不声称） | ✅ 取决于构建 |
+| 收消息 / 触发 | 长轮询 `getUpdates` | DB 读库触发（Node 轮询 `/messages`；`/listen` 不抢 UI） | 监听回调（抢桌面界面） |
+| 4.1.12.55 | ✅ 与客户端版本无关 | ✅ DB 只读全通、可上生产；发送需完整 UIA | ⚠️ 冷启动 gate=0 attach 失败，需热激活+授权+复测 |
 
-**4.1.12.55 结论**：该版把微信 4.x 的 Qt 无障碍 gate 默认关掉（`mmui` 树冷启动不物化）。`wechatauto` 自带热激活，故 pc-db 的 DB 只读在 4.1.12.55 全通、**可上生产**；`wxautox4` 无热激活，pc-uia 冷启动 attach 失败、只在 gate 热激活后才可用，**属有条件可用**（详见 `docs/research/compat-4.1.12.55.md`）。三后端启动、互斥与完整版本矩阵见 `sidecar/README.md`。
+**4.1.12.55 结论**：该版把微信 4.x 的 Qt 无障碍 gate 默认关掉（`mmui` 树冷启动不物化）。`wechatauto` 自带热激活，故 **`team`（replica）的 DB 只读在 4.1.12.55 全通、可上生产**，其 `--profile team` 发送走 UIA/OCR；`personal`（iLink）不受客户端版本影响；`wxautox4` 无热激活，冷启动 attach 失败，故不作为发布后端（详见 `docs/research/compat-4.1.12.55.md`）。启动、互斥与版本要求见 `sidecar/README.md`。
 
 ## 平台限制，以及为什么它们不是 bug
 

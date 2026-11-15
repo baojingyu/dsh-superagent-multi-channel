@@ -191,34 +191,32 @@ Setup must succeed before polling or work starts. Overview lists missing require
    List personal CLIs, such as one signed in to your own account, as blocked commands.
 4. **Prompts.** Set the team sections: the GitHub disclosure line, review bots, the commit author and the auto-merge condition.
 
-### WeChat backends (choose one)
+### WeChat Source: two profiles (personal / team)
 
-A personal WeChat account has no official open message API. This bundle puts send/receive behind a **loopback HTTP sidecar**, and the Node side only knows the frozen contract (`sidecar/wxauto-bridge/contract.md`). **Switching backends means switching which sidecar you run and changing the panel's "Bridge URL / Bridge launcher / token file"** — the business layer does not change. Three backends:
+A personal WeChat account has no official open message API. This bundle puts send/receive behind a **loopback HTTP sidecar**, and the Node side only knows the frozen contract (`sidecar/wxauto-bridge/contract.md`). **One WeChat Source serves two profiles**, set by the `profile` field; switching profile means pointing the panel's "Bridge URL / Bridge launcher / token file" at the matching sidecar — the business layer does not change. **The default profile is `personal`.**
 
-| Backend | Default port | OS | Cost | Groups / `@` | Members | Media | Send | Use for |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `wxauto-bridge` (`pc-uia` / wxautox4) | 8787 | Windows only (signed-in desktop WeChat) | **needs a wxautox4 commercial licence** | groups + DMs; `@` via client markup | observed (only those who spoke) | yes (build-dependent) | text/files/voice, keyed idempotency | Windows dev groups: `@` triggers and outbound |
-| `weixin-db-bridge` (`pc-db` / wechatauto-replica) | 8788 | Windows only (signed-in desktop WeChat) | **free** (Apache-2.0) | groups + DMs; `@` undetectable (none) | **full roster** | yes (when `MediaDownloader` is available) | **read-only 501 by default**; `--allow-send` to send | free read-only supplement: history/roster/media archive |
-| `weixin-ilink-bridge` (`ilink` / Tencent iLink Bot) | 9300 | **any OS (no desktop WeChat)** | **free** (official channel) | **DMs only**; no groups, no `@` | observed (peer only) | yes (CDN + AES decrypt) | text (echoes `context_token`), keyed idempotency | personal assistant / remote control for ordinary users |
+| Profile | Default port | Backend | OS | Cost | Groups / `@` | Members | Media | Send | Use for |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `personal` (**default**) | 9300 | `weixin-ilink-bridge` (`ilink` / Tencent iLink Bot) | **any OS (no desktop WeChat)** | **free** (official channel) | **DMs only**; no groups, no `@` | observed (peer only) | yes (CDN + AES decrypt) | text (echoes `context_token`), keyed idempotency | personal assistant / remote control / self-dispatched tasks |
+| `team` | 8788 | `weixin-db-bridge` (`pc-db` / wechatauto-replica) | Windows only (signed-in desktop WeChat, **4.1.12+**) | **free** (Apache-2.0) | groups + DMs (DB-triggered group messages); inbound `@` undetectable (none) | **full roster** | yes (when `MediaDownloader` is available) | **read-only 501 by default**; `--profile team` enables text/file/group-@ send (UIA) | dev-group replica: group-message trigger, history/roster, text/file/@ |
 
 **Default policy:**
 
-- **iLink is the default for personal assistants**: free, QR scan to start, cross-OS; the cost is DMs only and rate limits — no groups, no `@` promise.
-- **Use wxauto for Windows dev groups**: group `@`, outbound files and voice are the fullest, and it is the current production main backend.
-- **wechatauto is a read-only supplement only**: history/roster/media archive; sending requires `--allow-send` and accepts the UI mutual exclusion with wxauto.
-- **Do not ship wxautox4 reverse-engineering / bypass in the release**: only its public API is called, licensing is the deployer's responsibility, and the repository distributes none of its files and contains no code that evades its licence check.
+- **`personal` is the default profile**: personal iLink assistant — free, QR scan to start, cross-OS, self-dispatched tasks; the cost is DMs only (no groups, no `@`) and rate limits.
+- **`team` uses replica**: weixin-db-bridge, free (Apache-2.0), DB-read group-message triggers, full history/roster, and real **text/file/group-@ sending** on the PC WeChat (start it with `--profile team`; read-only by default). Requires Windows and WeChat **4.1.12+**; sending drives the desktop UI. **No voice transcription, no Moments, no friends/create-group.**
+- **Only these two backends ship in the release**: the two sidecars plus `start-weixin-ilink.cmd` and `start-weixin-db.cmd`. `wxautox4` / `gate-guard` are **no longer bundled by default**; any wxautox4-based backend is an optional external component the deployer installs and licenses themselves. The repository distributes none of its files and contains no code that evades its licence check.
 
 **Startup** (details in `sidecar/README.md` and each subdirectory's README):
 
-- `sidecar\start-wxbridge.cmd` (wxauto-bridge); `sidecar\start-weixin-db.cmd` (weixin-db, which needs `wechatauto-replica` installed and reads `WXBRIDGE_TOKEN`); `sidecar\start-weixin-ilink.cmd` (iLink — first `node server.mjs login` to scan and save the credential, then `run --token-file …`).
+- `personal` → `sidecar\start-weixin-ilink.cmd` (iLink — first `node server.mjs login` to scan and save the credential, then `run --token-file …`, port 9300).
+- `team` → `sidecar\start-weixin-db.cmd` (weixin-db, which needs `wechatauto-replica` installed and reads `WXBRIDGE_TOKEN`, port 8788); to actually send text/file/@ add `--profile team` (or `set WXBRIDGE_PROFILE=team`).
 
-**Mutual exclusion and coexistence:** `pc-uia` and `pc-db` share the same desktop WeChat UI — **only one UI-automation client may drive the interface for the same account at a time**. A read-only `pc-db` (without `--allow-send`) does not touch the UI and can run alongside `pc-uia` for history/roster, but only one instance may hold the account login/decryption keys at a time. `ilink` has no UI dependency and can run in parallel, but it is a Bot identity under your own WeChat and cannot double-send to the same conversation as the desktop client.
+**Coexistence:** `ilink` has no UI dependency and the read-only `pc-db` does not touch the desktop UI, so either can run without driving the interface; only **one instance may hold the account login/decryption keys at a time**, and `ilink` is a Bot identity under your own WeChat that cannot double-send to the same conversation as a desktop client. If you separately add a wxautox4-based UI backend, keep it to one UI-automation client per account.
 
 **4.1.12.55 finding** (measured; see `docs/research/compat-4.1.12.55.md`): this build turns the WeChat 4.x Qt accessibility gate off by default (gate=0), so the `mmui` control tree is not materialised on a cold start.
 
-- `weixin-db-bridge` (DB read-only) passes **all five read APIs on 4.1.12.55 and can go to production directly (recommended)**.
-- `wxauto-bridge` (`pc-uia`/wxautox4 41.2.3) **fails to attach on a cold start** on 4.1.12.55 (`no signed-in client main window found`) and only works after the gate is hot-activated by `wechatauto.accessibility`; **wxautox4 does not do hot activation itself**. So pc-uia is **conditionally usable** on 4.1.12.55: add a gate hot-activation guard + confirm licensing + retest after restart first; otherwise keep the status quo and do not restart lightly (a bridge started before the upgrade shows an empty `/rooms` plus many automatic re-attaches).
-- `weixin-ilink-bridge` is unaffected by the client version.
+- `team`'s `weixin-db-bridge` passes **all five read APIs on 4.1.12.55 and can go to production directly**; its `--profile team` send path goes through `wechatauto`'s UIA/OCR (requires the full `wechatauto-replica` and a visible desktop).
+- `personal`'s `weixin-ilink-bridge` is unaffected by the client version.
 - Rollback point: current client `4.1.12.55`, last usable `4.1.9.30`; the `xwechat_files` data directory is still readable after a client rollback.
 
 ### Management API

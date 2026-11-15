@@ -66,9 +66,6 @@
     "sidecar/weixin-ilink-bridge/README.md",
     "sidecar/weixin-ilink-bridge/LICENSE",
     "sidecar/weixin-ilink-bridge/lib/*.mjs",
-    "sidecar/gate-guard/gate_guard.py",
-    "sidecar/gate-guard/README.md",
-    "sidecar/gate-guard/start-gate-guard.cmd",
     "sidecar/start-weixin-db.cmd",
     "sidecar/start-weixin-ilink.cmd"
   ],

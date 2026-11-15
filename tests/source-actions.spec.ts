@@ -63,7 +63,7 @@ describe('WeChat bridge actions', () => {
     const host = {
       context: () => ({ commands: { withSignal: () => ({ run: async (program: string, args: string[]) => {
         ran.push([program, ...args])
-        if (program === 'netstat') return '  TCP    127.0.0.1:8787    0.0.0.0:0    LISTENING    4242'
+        if (program === 'netstat') return '  TCP    127.0.0.1:9300    0.0.0.0:0    LISTENING    4242'
         if (program === 'powershell') return 'C:\\Windows\\explorer.exe'
         return ''
       } }) } }),

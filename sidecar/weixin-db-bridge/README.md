@@ -1,22 +1,31 @@
-# weixin-db-bridge —— 微信 4.x 本地数据库只读 sidecar（`pc-db` 后端）
+# weixin-db-bridge —— 微信 4.x 本地数据库 sidecar（`pc-db` 后端）
 
-这是 `wxauto-bridge` 的一个**只读、免注入、免 UIA** 后端实现。它不驱动微信界面、
-不修改任何数据库、不启动会抢占窗口的监听器，只通过 `wechatauto-replica` 读取本机
-微信 4.x 的 SQLCipher 本地库（`contact.db` / `session.db` / `message_N.db`）来回答
-会话、成员、消息与图片查询。
+这是 `wxauto-bridge` 的一个**免注入**后端实现。它不注入微信进程、不启动会抢占窗口的
+监听器，通过 `wechatauto-replica` 读取本机微信 4.x 的 SQLCipher 本地库
+（`contact.db` / `session.db` / `message_N.db`）来回答会话、成员、消息与图片。
 
-> 契约以 `../wxauto-bridge/contract.md` 为准。本 sidecar 只实现其中的**只读子集**，
-> 字段与错误码严格对齐；发送默认返回 `501`。
+支持两个运行档位（`--profile`）：
+
+- **`readonly`（默认）**：纯只读。`POST /send` 恒 `501`，`POST /listen` 只「认不认得
+  这些会话」。完全不碰微信界面。
+- **`team`（`--profile team` / `--team`）**：DB 触发的**全量模式**。`allow_send` 自动
+  打开，`POST /send` 经 `wechatauto.Chat.SendMsg` / `SendFiles` 发送 **文本 / 文件 /
+  群 @**；`POST /listen` 只记录房间供 Node 轮询 `/messages`（群触发靠读库），仍
+  **不 `AddListenChat` / `StartListening`**、不抢 UI。
+
+> 契约以 `../wxauto-bridge/contract.md` 为准。本 sidecar 实现其中的只读子集，并在
+> `team` 档位补齐发送（文本/文件/@）。字段与错误码严格对齐。
 
 ## 1. 定位与能力边界（诚实声明）
 
-`GET /health.capabilities` 对本后端固定为：
+`GET /health.capabilities` 对本后端为：
 
 | 字段 | 取值 | 说明 |
 |---|---|---|
-| `mentions` | `"none"` | DB 里拿不到可信的 `@` 结构化列表；`ats` 恒为 `[]`，不做「文本里猜 @昵称」。需要群消息时把群设为「全部消息」，靠 Policy/关键词准入。 |
+| `mentions` | `"none"` | DB 里拿不到可信的入站 `@` 结构化列表；`ats` 恒为 `[]`。出站的群 `@`（`team` 档位）是另一回事，见下。 |
 | `members` | `"full"` | 群成员表来自 `contact.db` 的 `chat_room` / `chatroom_member`，是**全量名册**。 |
 | `media` | `true` / `false` | `wechatauto.media.MediaDownloader` 可用时为 `true`，`GET /media/<id>` 才会尝试解密下载；否则 `false` 且 `/media` 返回 `501`。 |
+| `send` | `true` / `false` | `readonly` 档位为 `false`（`/send` 恒 `501`）；`team` 档位或显式 `--allow-send` 为 `true`。 |
 
 端点行为：
 
@@ -26,18 +35,30 @@
 | `GET /status` | 登录账号 `wxid` / 昵称 / `backend:"pc-db"` / `client`（客户端版本，如 `4.1.12.55`）。 |
 | `GET /rooms` | 群 + 单聊会话候选全集（只读，不订阅）。群 id 归一为 `wxdb_g_<sha1>`；单聊用原 wxid（不合正则才归一为 `wxdb_u_<sha1>`）。 |
 | `GET /members?room=` | 群成员全量；`room` 接受归一 id、群显示名、原始 `xxx@chatroom`；未知会话返回 `[]`。 |
-| `GET /messages?room=&limit=&cursor=` | 读 `get_messages`（无游标→最近一页）/ `get_new_messages`（有游标→增量）。`next` 为不透明游标（DB `sort_seq`）。单聊 `room=""` 合并所有私聊为一条流。 |
+| `GET /messages?room=&limit=&cursor=` | 读 `get_messages`（无游标→最近一页）/ `get_new_messages`（有游标→增量）。`next` 为不透明游标（DB `sort_seq`）。单聊 `room=""` 合并所有私聊为一条流。**两个档位一致**，群消息即触发源。 |
 | `GET /media/<id>` | `<nativeId>#<index>`，按 `MediaDownloader.download_image` 解密本机图片；取不到 `404`，整体无能力 `501`，**绝不返回 200+0 字节**。 |
-| `POST /send` | **默认 `501 unsupported`（只读）**；显式 `--allow-send` 才经 `wechatauto.guia.quick_send` 走 UIA 发送。 |
-| `POST /listen` | 只做「认不认得这些会话」的应答（`listening/added/removed/failed`）。**不 `AddListenChat`/`StartListening`**，绝不抢微信窗口。 |
+| `POST /send` | `readonly`：`501 unsupported`。`team`：支持 `text`、`files`（文件**绝对路径**列表，另兼容契约的 base64 `file`）、`at`（群成员昵称/ID，不要求 AtAll）；走 `wechatauto.Chat.SendMsg` / `SendFiles`。 |
+| `POST /listen` | 只做「认不认得这些会话」的应答并记录（`listening/added/removed/failed`）。**两个档位都不 `AddListenChat`/`StartListening`**，绝不抢微信窗口。 |
+
+### `team` 档位 /send 细节
+
+- 请求体：`{"room","wxid","text","quoteId","at","files","file","idempotencyKey"}`。
+  - `room`：归一 id / 群名 / 原始 `xxx@chatroom` / wxid，均会被解析回原始 username 再发。
+  - `text`：正文；空串时必须有 `files`/`file`，否则 `400`。
+  - `files`：**文件绝对路径列表**（sidecar 原生）；任一不存在 → `400`。
+  - `file`：`{"name","data": base64}` 单文件（对齐 Node 契约）；写到私有临时目录、发完即删。
+  - `at`：成员昵称/ID 字符串或数组，仅群聊生效；解析成群成员显示名后真 `@`。
+    多成员时**第一个为真实 `@`**，其余以 `@名字` 文本形式附在正文后（`guia.at_member`
+    单次只 `@` 一人）。
+- 错误码：`400`（参数/文件/base64 非法）、`401`、`404`（`room` 不存在）、
+  `501`（readonly）、`502`（`wechatauto`/GUI 不可用、发送失败）。
 
 ### 与 `wxautox4`（L0 `pc-uia` 后端）互斥
 
-- 本后端**完全不碰 UIAutomation / 窗口**，因此理论上可与其它工具共存；但 `--allow-send`
-  会调用 `wechatauto.guia.quick_send`（UIA + OCR），此时与任何其它 UI 自动化客户端
-  （`wxautox4`、`wxauto` 等）**同一微信号同一时刻只能有一个在操作界面**，否则互相抢焦点。
+- 只读档位**完全不碰 UIAutomation / 窗口**，可与其它工具共存；`team` 档位的发送路径
+  （`wechatauto.Chat.SendMsg/SendFiles` → `WeChatGUI`）是 UIA + OCR，此时与任何其它 UI
+  自动化客户端**同一微信号同一时刻只能有一个在操作界面**，否则互相抢焦点。
 - **同一微信号同一时刻只允许一个实例持有登录态/读密钥**（双开、风控红线）。
-- 只读读库（不加 `--allow-send`）不会修改微信数据，也不会触发界面操作。
 
 ## 2. 安装
 
@@ -64,6 +85,10 @@ $py = "C:\...\default-workspace\_analysis\wa-venv\Scripts\python.exe"
 > 与可选 `zstandard`（长文本消息解压）。本 sidecar 会优先正常 `import wechatauto`，
 > 若完整包因 UIA 依赖缺失而导入失败，会退化为**只加载 `wechatauto.db` / `wechatauto.media`
 > 子模块**（绕开会拉起整条 UIA 栈的包 `__init__`），因此纯只读场景不需要装 UIA/OCR 全套。
+>
+> **`team` 档位的发送**走 `wechatauto.Chat`（UIA + OCR），必须装**完整** `wechatauto-replica`
+> （含 `uiautomation` / `winsdk` / `pyautogui` / `opencv-python` 等），且需要 Windows 4.1.12+
+> 客户端、已登录、桌面可见未锁屏。纯只读子模块退化模式**不能**发送。
 
 ## 3. 运行
 
@@ -73,10 +98,14 @@ token 只经命令行或环境变量传入，日志只打印 `token=set`，**任
 # 1) 设 token（0800 权限的私密文件读取也可，这里用环境变量最简单）
 $env:WXBRIDGE_TOKEN = "<a-long-random-token>"
 
-# 2) 启动（默认 127.0.0.1:8788；与 wxauto-bridge 的 8787 区分开）
+# 2) 只读档位（默认；127.0.0.1:8788，与 wxauto-bridge 的 8787 区分开）
 python sidecar\weixin-db-bridge\server.py --port 8788
 
-# 只读自测（无需微信）：确定性 fake 数据，跨平台
+# 3) team 全量档位（DB 触发 + 文本/文件/@ 发送）
+python sidecar\weixin-db-bridge\server.py --port 8788 --profile team
+#   或等价：python sidecar\weixin-db-bridge\server.py --port 8788 --team
+
+# 自测（无需微信）：确定性 fake 数据，跨平台
 python sidecar\weixin-db-bridge\selftest.py
 ```
 
@@ -88,14 +117,17 @@ python sidecar\weixin-db-bridge\selftest.py
 | `--host` | 默认 `127.0.0.1`；绑定非回环需显式 `--allow-remote`。 |
 | `--token` | Bearer token；也可用 `WXBRIDGE_TOKEN` / `WEIXIN_DB_TOKEN`。 |
 | `--fake` | 用确定性 fake 后端（不导入 wechatauto、不碰 Windows）。 |
-| `--allow-send` | 允许 `POST /send` 经 `wechatauto.guia.quick_send` 发送（默认只读 501）。 |
+| `--profile` | `readonly`（默认，只读）/ `team`（DB 触发 + 文本/文件/@ 发送）。 |
+| `--team` | `--profile team` 的别名。 |
+| `--allow-send` | 允许发送（`team` 档位已隐含；`readonly` 下如单独加则等价打开发送）。 |
 | `--db-dir` | 微信数据根目录（默认自动探测 `xwechat_files`）。 |
 | `--account` | 指定账号目录名（默认按最近活动 + 密钥校验选择）。 |
 | `--wechatauto-path` | 未 `pip install` 时指向 `wechatauto-replica` 源码目录。 |
 | `--media-cache-ttl` | 媒体字节缓存秒数，默认 300。 |
 
 Windows 一键启动器：`sidecar\start-weixin-db.cmd`（读取 `WXBRIDGE_TOKEN`，可用
-`WECHATAUTO_VENV` 指定 venv、`WECHATAUTO_PATH` 指定源码目录）。
+`WECHATAUTO_VENV` 指定 venv、`WECHATAUTO_PATH` 指定源码目录）。切 team 档位有两种方式：
+命令行追加 `--profile team`（`%*` 原样透传），或设 `set WXBRIDGE_PROFILE=team`。
 
 ## 4. 与 Node 侧对接
 
@@ -107,27 +139,52 @@ Node 侧客户端（`src/sources/chat/weixin/bridge.ts`）在所有面板里用�
 - 单聊事件按契约 `room: ""`，`threadRoot` 由 Node 取 `sender.id`；`/rooms` 仍会列出单聊
   候选（面板下拉需要），但私聊读取统一走 `room=""` 那条流。
 - `at` 用消息 `create_time`（epoch 秒）转 ISO8601 UTC；无时间字段回落服务端时间。
+- 群触发（`team` 档位）：Node 侧轮询 `GET /messages?room=<群归一 id>&cursor=<next>`，读库
+  得到新消息作为触发源；sidecar 的 `/listen` 只把房间记进应答，**不订阅、不抢 UI**。
+
+### 4.1 `team`（`pc-db`）与 `iLink`（`weixin-ilink-bridge`）分工
+
+两者是**不同 profile、互补的两条路**，同一微信号不要同时用会抢界面的路径：
+
+| 维度 | `pc-db` + `team`（本 sidecar） | `iLink`（`weixin-ilink-bridge`） |
+|---|---|---|
+| 收发通道 | 本地库读 + `wechatauto.Chat`（UIA/OCR）发送 | iLink 协议直连 |
+| 抢 UI | 发送时占用界面（UIA + OCR） | 不占用本地界面 |
+| 前提 | Windows 4.1.12+ 客户端在线、桌面可见 | iLink 网关可达、账号已绑定 |
+| 适用 | 需要在 PC 客户端上真发、且能接受占界面 | 无 PC 客户端 / 不愿占界面 |
+| 档位 | 只读用 `--profile readonly`（不占 UI），真发用 `--profile team` | — |
+
+选型：**只想读不占界面** → `readonly`；**必须在 PC 微信上真发文本/文件/@** → `team`；
+**完全不想占界面 / 无 PC 客户端** → 走 iLink。
 
 ## 5. 自测
 
-`selftest.py` 用 `--fake` 在进程内起服务，断言 54 项 HTTP 契约（鉴权、错误码、八个端点、
-游标翻页、媒体字节、能力自述）。运行：
+`selftest.py` 用 `--fake` 在进程内起服务，断言 **71 项** HTTP 契约：第一段 54 项覆盖只读
+档位（鉴权、错误码、八个端点、游标翻页、媒体字节、能力自述、只读 `/send` 501）；第二段
+17 项覆盖 `--profile team`（`/send` 的 text/files/at/组合/幂等/校验错误 400·404，
+`/listen` 200 记录房间，能力自述 `send:true`）。运行：
 
 ```powershell
 python sidecar\weixin-db-bridge\selftest.py
-# 期望输出：... ALL PASS
+# 期望输出：71 checks, 0 failure(s) / ALL PASS
 ```
 
-真实微信只读验证（需微信登录 + 本机库可解密）：
+真实微信验证：
 
 ```powershell
 $env:WXBRIDGE_TOKEN="<token>"
+# 只读：/health /status /rooms /members /messages 均只读
 python sidecar\weixin-db-bridge\server.py --port 8788 --wechatauto-path ..\_analysis\wechatauto-replica
-# 另开终端用 curl 验证 /health /status /rooms /members /messages 均为只读
+# team 真发（需完整 UIA 装好、微信在线、桌面可见）：
+python sidecar\weixin-db-bridge\server.py --port 8788 --profile team --wechatauto-path ..\_analysis\wechatauto-replica
+# curl POST /send {"room":"<群id>","text":"hi","at":["某成员"]} 观察界面发送与落库
 ```
 
 ## 6. 安全
 
 - 只绑定回环地址；Bearer token 用 `hmac.compare_digest` 比对，缺失与错误一律 `401`。
 - token 不落日志、不进错误体；`--verbose` 的堆栈也不包含 token（token 只在请求头里）。
-- 只读：不改库、不 `AddListenChat`、不切会话；`--allow-send` 是唯一会碰界面的开关。
+- 只读档位：不改库、不 `AddListenChat`、不切会话。`team` 档位唯一会碰界面的是 `/send`
+  （`wechatauto.Chat.SendMsg/SendFiles`）；`/listen` 始终只记录，不订阅。
+- `files` 走绝对路径且必须存在；base64 `file` 的落盘文件名经 basename + 字符白名单净化，
+  写入私有临时目录、发送后立即删除，避免目录穿越与残留。

@@ -67,7 +67,7 @@ export const WeixinConfigSchema = z.object({
   bridgeTask: z.string().trim().min(1).max(200).regex(/^[A-Za-z0-9 _.\-\\]+$/, 'Invalid task name').default('DSH-WeChat-Bridge'),
   /**
    * Absolute path of this machine's sidecar launcher (a .cmd or .bat). One launcher per profile - weixin-ilink-bridge
-   * (start-weixin-ilink.cmd) for personal, weixin-db-bridge (start-weixin-db.cmd) for team - and the panel points it at
+   * (start-weixin-ilink.cmd) for personal, weixin-db-bridge (start-weixin-db-team.cmd) for team - and the panel points it at
    * whichever one this Source uses. The plugin starts it detached so the sidecar outlives a DSH restart, and never needs
    * to know what is inside: the client library and its local shim stay on the machine, out of the repository. Filled in
    * the panel, so starting the bridge needs no command line.
@@ -208,7 +208,7 @@ const Fields: FieldSpec[] = [
       { value: 'personal', label: { zh: '个人 iLink（默认，9300）', en: 'Personal iLink (default, 9300)' } },
       { value: 'team', label: { zh: '研发群 replica（8788）', en: 'Team replica (8788)' } },
     ],
-    hint: { zh: '这个微信 Source 面向谁：personal（默认）=个人 iLink 单聊助手（腾讯 iLink，start-weixin-ilink.cmd，桥地址 9300）；team=研发群 replica（weixin-db-bridge，start-weixin-db.cmd，桥地址 8788，需 Windows 桌面微信 4.1.12+）。team 默认只读；用 `--profile team` 启动后才发文本/文件/群@。它只记录 profile 与推荐配置，真正的后端仍由下面的「桥地址」和「桥启动器」决定。', en: 'Who this WeChat Source serves: personal (default) = personal iLink assistant (Tencent iLink, start-weixin-ilink.cmd, bridge URL 9300); team = replica for dev groups (weixin-db-bridge, start-weixin-db.cmd, bridge URL 8788, needs Windows desktop WeChat 4.1.12+). team is read-only until started with `--profile team`, which enables text/files/group @. It records the profile and its recommended settings; the Bridge URL and launcher below still decide the real backend.' } },
+    hint: { zh: '这个微信 Source 面向谁：personal（默认）=个人 iLink 单聊助手（腾讯 iLink，start-weixin-ilink.cmd，桥地址 9300）；team=研发群 replica（weixin-db-bridge，start-weixin-db-team.cmd，桥地址 8788，需 Windows 桌面微信 4.1.12+）。team 默认只读；用 `--profile team` 启动后才发文本/文件/群@。它只记录 profile 与推荐配置，真正的后端仍由下面的「桥地址」和「桥启动器」决定。', en: 'Who this WeChat Source serves: personal (default) = personal iLink assistant (Tencent iLink, start-weixin-ilink.cmd, bridge URL 9300); team = replica for dev groups (weixin-db-bridge, start-weixin-db-team.cmd, bridge URL 8788, needs Windows desktop WeChat 4.1.12+). team is read-only until started with `--profile team`, which enables text/files/group @. It records the profile and its recommended settings; the Bridge URL and launcher below still decide the real backend.' } },
   { key: 'baseUrl', type: 'text', advanced: true, label: { zh: '桥地址', en: 'Bridge URL' },
     hint: { zh: '微信 sidecar 的 loopback 地址，只允许本机、不要填公网地址。按 profile 填：personal（默认）用 weixin-ilink-bridge 的 9300（腾讯 iLink，免费跨 OS，仅单聊个人助手）；team 用 weixin-db-bridge 的 8788（wechatauto 免费；默认只读，`--profile team` 可发文本/文件/群@）。地址指向哪个后端，就由哪个后端服务。', en: 'Loopback address of the WeChat sidecar; localhost only, never a public address. Fill by profile: personal (default) uses weixin-ilink-bridge on 9300 (Tencent iLink, free and cross-OS, personal-assistant DMs only); team uses weixin-db-bridge on 8788 (free wechatauto; read-only by default, `--profile team` enables text/files/group @). Whichever backend you point at serves this Source.' } },
   { key: 'tokenFile', type: 'text', label: { zh: '桥 token 文件', en: 'Bridge token file' },
@@ -235,20 +235,20 @@ const Fields: FieldSpec[] = [
     columns: [
       { key: 'any', type: 'text', label: { zh: '关键词', en: 'Keyword' } },
     ] },
-  { key: 'autoReplies', type: 'rows', advanced: true, label: { zh: '关键词自动回复', en: 'Canned keyword replies' },
-    hint: { zh: '命中即由轮询循环直接回固定文字，不经过模型。这条消息仍会交给模型——用模板顶掉一个人说的话，剩下的内容就丢了。', en: 'On a match the polling loop sends this fixed text itself, without the model. The message is still handed to the model: answering a person with a template and dropping the rest of what they said loses it.' },
+  { key: 'autoReplies', type: 'rows', advanced: true, label: { zh: '关键词自动回复（兼容字段，已停用）', en: 'Canned keyword replies (compatibility field, disabled)' },
+    hint: { zh: '为对齐官方飞书来源，微信不再由轮询循环直接发固定回复；此字段仅保留旧配置兼容，当前不会发送任何内容。', en: 'To match the official Feishu source, WeChat no longer sends canned replies from the polling loop; this field is retained for old config compatibility and currently sends nothing.' },
     columns: [
       { key: 'any', type: 'text', label: { zh: '关键词', en: 'Keyword' } },
       { key: 'reply', type: 'text', label: { zh: '回复内容', en: 'Reply' } },
     ] },
   { key: 'sendFiles', type: 'switch', advanced: true, label: { zh: '允许模型回传文件', en: 'Let the model send files' },
     hint: { zh: '开启后，工单里的模型可以把它自己工作目录内的文件（≤20 MiB、非可执行文件）回传到这个会话。默认关闭——这等于给模型一条把文件发出去的通道。', en: 'When on, the model working a ticket may send a file from its own working directory (≤ 20 MiB, not an executable) to this conversation. Off by default: it is a channel for files to leave the machine.' } },
-  { key: 'acknowledge', type: 'switch', advanced: true, label: { zh: '收到就先回一句', en: 'Acknowledge on receipt' },
-    hint: { zh: '开启时，有人 @ 机器人或私聊机器人就在评估之前立刻回一句「收到」。默认关闭：评估可能把这条判为忽略，那样「收到」会让人以为在干活。关闭后改为评估完按结果回——被忽略的会收到一句「这条我没有接：…」，被接受的由接受时的回执回复。', en: 'On: a receipt goes out immediately when someone mentions the bot or messages it directly, before the assessment. Off by default, because the assessment may ignore the message and "on it" then reads as work in progress. Off: the reply follows the decision - a refused message gets one line saying it was not taken, an accepted one gets the acceptance reply.' } },
-  { key: 'ackText', type: 'text', advanced: true, label: { zh: '回执内容', en: 'Receipt text' },
-    hint: { zh: '回执只表示「收到了」，此时还没读懂你要做什么，所以别写具体承诺。', en: 'A receipt only says it arrived; nothing has been understood yet, so do not promise anything specific.' } },
-  { key: 'progressAfterSeconds', type: 'number', advanced: true, min: 0, max: 3600, label: { zh: '处理中提醒 / 秒', en: 'Still-working note / s' },
-    hint: { zh: '发出回执后，机器人在这个会话里一直没说话，就每隔这么久补一句「还在处理中」（最多 3 次）。机器人一开口就停。填 0 关闭。', en: 'After the receipt, if the bot has said nothing in that chat, add a "still working" note at this interval (at most 3). It stops as soon as the bot speaks. 0 turns it off.' } },
+  { key: 'acknowledge', type: 'switch', advanced: true, label: { zh: '收到就先回一句（兼容字段，已停用）', en: 'Acknowledge on receipt (compatibility field, disabled)' },
+    hint: { zh: '为对齐官方飞书来源，微信不再在评估前自动发「收到」；此字段仅保留旧配置兼容，当前不会发送回执。', en: 'To match the official Feishu source, WeChat no longer sends a receipt before assessment; this field is retained for old config compatibility and currently sends no receipt.' } },
+  { key: 'ackText', type: 'text', advanced: true, label: { zh: '回执内容（兼容字段，已停用）', en: 'Receipt text (compatibility field, disabled)' },
+    hint: { zh: '兼容旧配置；当前不会发送任何回执。', en: 'Compatibility only; no receipt is currently sent.' } },
+  { key: 'progressAfterSeconds', type: 'number', advanced: true, min: 0, max: 3600, label: { zh: '处理中提醒 / 秒（兼容字段，已停用）', en: 'Still-working note / s (compatibility field, disabled)' },
+    hint: { zh: '兼容旧配置；当前不会发送处理中提醒。', en: 'Compatibility only; no still-working note is currently sent.' } },
   { key: 'mentionBack', type: 'switch', advanced: true, label: { zh: '回复时 @ 发言人', en: 'Mention the sender in a reply' },
     hint: { zh: '仅对群聊生效：回复群里找机器人的那个人时带上 @，让对方确实收到提醒。私聊没有 @ 这一说，开了也不会带。', en: 'Groups only: a reply to the person who addressed the bot carries an @, so they are actually notified. A direct message has no mention to make, so this does nothing there.' } },
   { key: 'voice', type: 'switch', advanced: true, label: { zh: '转写语音消息', en: 'Transcribe voice messages' },
@@ -256,7 +256,7 @@ const Fields: FieldSpec[] = [
   { key: 'images', type: 'switch', advanced: true, label: { zh: '接收图片', en: 'Receive images' },
     hint: { zh: '开启时图片会作为附件交给模型；关闭时只在文字里留「[图片]」占位，不下载任何字节。', en: 'On hands images to the model as attachments; off leaves a `[图片]` placeholder in the text and downloads nothing.' } },
   { key: 'bridgeLauncher', type: 'text', advanced: true, label: { zh: '桥启动器', en: 'Bridge launcher' },
-    hint: { zh: '本机用来启动微信 sidecar 的脚本绝对路径（.cmd / .bat）。两个 profile 各配一个启动器：personal 用 start-weixin-ilink.cmd（weixin-ilink-bridge，腾讯 iLink 跨 OS 个人助手，9300）；team 用 start-weixin-db.cmd（weixin-db-bridge，wechatauto 免费只读，8788）。插件只负责把它拉起来（后台、无窗口、脱离 DSH），脚本里写了什么由你决定——客户端库和本机 shim 都留在机器上，不进仓库。填了它就用它启动，比计划任务更直接；它启动哪个后端，就要和上面的「桥地址」指向同一个端口。', en: 'Absolute path of the script that starts the WeChat sidecar (a .cmd or .bat). One launcher per profile: personal uses start-weixin-ilink.cmd (weixin-ilink-bridge, Tencent iLink, cross-OS personal assistant, 9300); team uses start-weixin-db.cmd (weixin-db-bridge, free read-only wechatauto, 8788). The plugin only launches it - detached, hidden, independent of DSH - and does not care what is inside: the client library and the machine shim stay out of the repository. With this set, Start runs it directly instead of the scheduled task; whichever backend it starts must use the same port as the Bridge URL above.' } },
+    hint: { zh: '本机用来启动微信 sidecar 的脚本绝对路径（.cmd / .bat）。两个 profile 各配一个启动器：personal 用 start-weixin-ilink.cmd（weixin-ilink-bridge，腾讯 iLink 跨 OS 个人助手，9300）；team 用 start-weixin-db-team.cmd（weixin-db-bridge，wechatauto 免费只读，8788）。插件只负责把它拉起来（后台、无窗口、脱离 DSH），脚本里写了什么由你决定——客户端库和本机 shim 都留在机器上，不进仓库。填了它就用它启动，比计划任务更直接；它启动哪个后端，就要和上面的「桥地址」指向同一个端口。', en: 'Absolute path of the script that starts the WeChat sidecar (a .cmd or .bat). One launcher per profile: personal uses start-weixin-ilink.cmd (weixin-ilink-bridge, Tencent iLink, cross-OS personal assistant, 9300); team uses start-weixin-db-team.cmd (weixin-db-bridge, free read-only wechatauto, 8788). The plugin only launches it - detached, hidden, independent of DSH - and does not care what is inside: the client library and the machine shim stay out of the repository. With this set, Start runs it directly instead of the scheduled task; whichever backend it starts must use the same port as the Bridge URL above.' } },
   { key: 'bridgeTask', type: 'text', advanced: true, label: { zh: '桥的计划任务', en: 'Bridge scheduled task' },
     hint: { zh: '本机运行微信 sidecar 的 Windows 计划任务名（personal / team 都可用，实际后端由启动器或该任务拉起）。插件不自己拉起进程，只用「启动桥 / 停止桥」按钮让这个任务启停；因为桥必须跑在已登录的桌面会话里，且要活过 DSH 重启。', en: 'The Windows scheduled task that runs the WeChat sidecar on this machine (works for both personal and team; the launcher or this task actually starts the backend). The plugin never spawns it; the Start/Stop buttons ask this task to run or end it, because the bridge must live in the signed-in desktop session and outlive a DSH restart.' } },
   { key: 'pollSeconds', type: 'number', advanced: true, min: 5, max: 3600, label: { zh: '轮询间隔 / 秒', en: 'Poll interval / s' },

@@ -1,5 +1,5 @@
 /** weixin-watch: the listen set it pushes to the backend each round, and what it reports back about it. */
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import type { BridgeClient, BridgeInboundOptions, BridgeListenResult } from '../src/sources/chat/weixin/bridge.ts'
 import { pollChat, pollRound, reconcileListen } from '../src/sources/weixin-watch.ts'
 import { WeixinConfigSchema } from '../src/sources/chat/weixin/kind.ts'
@@ -68,13 +68,14 @@ describe('reconcileListen', () => {
   })
 })
 
-describe('pollChat canned replies', () => {
-  const event = (nativeId: string, text: string) => ({
+describe('pollChat Feishu-aligned behavior', () => {
+  const event = (nativeId: string, text: string, extra: Record<string, unknown> = {}) => ({
     nativeId, chatId: 'wxname_group', sender: { id: 'wxname_person', name: '阿黎' }, text, at: '2026-11-08T00:00:00Z',
-    ats: [], ownMessage: false, mentionsAgent: false,
+    ats: [], ownMessage: false, mentionsAgent: false, ...extra,
   })
 
-  function harness(events: ReturnType<typeof event>[]) {
+  function harness(events: unknown[], initialCursor: string | undefined = '0') {
+    let cursor = initialCursor
     const sent: unknown[] = []
     const received: unknown[] = []
     const bridge = {
@@ -82,122 +83,41 @@ describe('pollChat canned replies', () => {
       async status() { return { loggedIn: true, wxid: 'wxid_self', name: '助手' } },
       async rooms() { return [] },
       async members() { return [] },
-      async messages() { return { events, next: '9' } },
+      async messages() { return { events, next: '9', head: '9' } },
       async send(message: unknown) { sent.push(message); return { msgId: 'srv-1', deduped: false } },
     } as unknown as BridgeClient
     const ctx = {
-      state: { get: () => '0', set: () => {} },
+      state: { get: () => cursor, set: (_key: unknown, value: string) => { cursor = value } },
       receive: async (trigger: unknown) => { received.push(trigger) },
     } as unknown as SourceContext
-    return { bridge, ctx, sent, received }
+    return { bridge, ctx, sent, received, cursor: () => cursor }
   }
 
-  it('sends the configured text on a keyword hit, and still hands the message to the agent', async () => {
-    const { bridge, ctx, sent, received } = harness([event('m1', '请查订单 12345')])
-    const rules = [{ any: '订单', reply: '已收到，正在查询。' }]
-    await expect(pollChat(ctx, bridge, 'weixin', 'wxname_group', { autoReplies: rules })).resolves.toBe(1)
-    expect(sent).toEqual([{ room: 'wxname_group', wxid: 'wxname_person', text: '已收到，正在查询。',
-      idempotencyKey: 'auto:weixin:m1' }])
-    // The template is not a reason to drop what the person said.
-    expect(received).toHaveLength(1)
-  })
-
-  it('sends nothing without a hit, and nothing for the agent\'s own echo', async () => {
-    const miss = harness([event('m2', '今天天气不错')])
-    await pollChat(miss.ctx, miss.bridge, 'weixin', 'wxname_group', { autoReplies: [{ any: '订单', reply: 'x' }] })
-    expect(miss.sent).toEqual([])
-    expect(miss.received).toHaveLength(1)
-
-    const own = harness([{ ...event('m3', '订单'), ownMessage: true }])
-    await pollChat(own.ctx, own.bridge, 'weixin', 'wxname_group', { autoReplies: [{ any: '订单', reply: 'x' }] })
-    expect(own.sent).toEqual([])
-    expect(own.received).toEqual([])
-  })
-
-  it('hands a backfilled message to the agent without a receipt or a canned reply', async () => {
-    // A catch-up message is history: it must reach the assessment (so an old "fix this" is seen) but never answer old words.
-    const backfilled = { ...event('m4', 'order 999'), historical: true, mentionsAgent: true } as ReturnType<typeof event>
-    const { bridge, ctx, sent, received } = harness([backfilled])
-    await expect(pollChat(ctx, bridge, 'weixin', 'wxname_group',
-      { autoReplies: [{ any: 'order', reply: 'x' }], acknowledge: true, ackText: 'ok' })).resolves.toBe(1)
-    expect(sent).toEqual([])
-    expect(received).toHaveLength(1)
-  })
-})
-
-describe('pollChat receipt and heartbeat', () => {
-  const direct = (nativeId: string, chat: string) => ({
-    nativeId, chatId: '', direct: true, sender: { id: 'wxname_person', name: '阿黎' }, text: '发布到公网',
-    at: '2026-11-08T00:00:00Z', ats: [], ownMessage: false, mentionsAgent: false,
-  })
-
-  /** One bridge whose page a test can change between rounds, recording every send. */
-  function harness(events: unknown[]) {
-    const box = { events }
-    const sent: unknown[] = []
-    const received: unknown[] = []
-    const bridge = {
-      async health() { return { ok: true, available: true } },
-      async status() { return { loggedIn: true, wxid: 'wxid_self', name: '助手' } },
-      async rooms() { return [] },
-      async members() { return [] },
-      async messages() { return { events: box.events, next: '9' } },
-      async send(message: unknown) { sent.push(message); return { msgId: 'srv', deduped: false } },
-    } as unknown as BridgeClient
-    const ctx = { state: { get: () => '0', set: () => {} },
-      receive: async (t: unknown) => { received.push(t) } } as unknown as SourceContext
-    return { bridge, ctx, box, sent, received }
-  }
-
-  it('receipts a direct message at once, before anything is assessed', async () => {
-    const h = harness([direct('ack-1', 'chat-a')])
-    await pollChat(h.ctx, h.bridge, 'weixin', 'chat-a', { acknowledge: true, ackText: '收到，正在处理，请稍等。' })
-    expect(h.sent).toEqual([
-      { room: '', wxid: 'wxname_person', text: '收到，正在处理，请稍等。', idempotencyKey: 'ack:weixin:ack-1' }])
-    // A receipt is not a replacement for handing the message over.
+  it('does not send receipts, canned replies, or progress notes', async () => {
+    const h = harness([event('m1', '请查订单 12345')])
+    await expect(pollChat(h.ctx, h.bridge, 'weixin', 'wxname_group',
+      { autoReplies: [{ any: '订单', reply: '已收到' }], acknowledge: true, ackText: '收到', progressAfterSeconds: 60 }))
+      .resolves.toBe(1)
+    expect(h.sent).toEqual([])
     expect(h.received).toHaveLength(1)
   })
 
-  it('receipts only an addressed message, and only once per chat per half minute', async () => {
-    const ambient = { ...direct('ack-2', 'chat-b'), direct: false, chatId: 'wxname_group', mentionsAgent: false }
-    const plain = harness([ambient])
-    await pollChat(plain.ctx, plain.bridge, 'weixin', 'chat-b', { acknowledge: true })
-    expect(plain.sent).toEqual([])
-
-    const burst = harness([direct('ack-3', 'chat-c'), direct('ack-4', 'chat-c')])
-    await pollChat(burst.ctx, burst.bridge, 'weixin', 'chat-c', { acknowledge: true })
-    expect(burst.sent).toHaveLength(1)
-    expect(burst.received).toHaveLength(2)
+  it('does not process the first page as new work', async () => {
+    const h = harness([event('m2', '历史消息')], '')
+    await expect(pollChat(h.ctx, h.bridge, 'weixin', 'wxname_group', {})).resolves.toBe(0)
+    expect(h.received).toHaveLength(0)
+    expect(h.cursor()).toBe('9')
   })
 
-  it('adds a still-working note while the bot is silent, and stops once it speaks', async () => {
-    vi.useFakeTimers()
-    try {
-      vi.setSystemTime(new Date('2026-05-01T00:00:00Z'))
-      const h = harness([direct('ack-5', 'chat-d')])
-      await pollChat(h.ctx, h.bridge, 'weixin', 'chat-d', { acknowledge: true, progressAfterSeconds: 60 })
-      expect(h.sent).toHaveLength(1)
+  it('skips the agent own message and leaves a backfilled message to the assessment', async () => {
+    const own = harness([event('m3', '订单', { ownMessage: true })])
+    await pollChat(own.ctx, own.bridge, 'weixin', 'wxname_group', {})
+    expect(own.received).toHaveLength(0)
+    expect(own.sent).toEqual([])
 
-      // Two minutes on, nothing said by the bot: one note, and only one.
-      vi.setSystemTime(new Date('2026-05-01T00:02:00Z'))
-      h.box.events = []
-      await pollChat(h.ctx, h.bridge, 'weixin', 'chat-d', { acknowledge: true, progressAfterSeconds: 60 })
-      const notes = h.sent.filter(item => String((item as { text: string }).text).includes('还在处理中'))
-      expect(notes).toHaveLength(1)
-      expect((notes[0] as { idempotencyKey: string }).idempotencyKey).toBe('note:weixin:ack-5:1')
-
-      // The bot speaks: the note for that chat stops.
-      vi.setSystemTime(new Date('2026-05-01T00:04:00Z'))
-      h.box.events = [{ ...direct('own-1', 'chat-d'), ownMessage: true }]
-      await pollChat(h.ctx, h.bridge, 'weixin', 'chat-d', { acknowledge: true, progressAfterSeconds: 60 })
-      const before = h.sent.length
-      vi.setSystemTime(new Date('2026-05-01T00:10:00Z'))
-      h.box.events = []
-      await pollChat(h.ctx, h.bridge, 'weixin', 'chat-d', { acknowledge: true, progressAfterSeconds: 60 })
-      expect(h.sent.length).toBe(before)
-    } finally {
-      vi.useRealTimers()
-    }
+    const historical = harness([event('m4', 'order 999', { historical: true, mentionsAgent: true })])
+    await expect(pollChat(historical.ctx, historical.bridge, 'weixin', 'wxname_group', {})).resolves.toBe(1)
+    expect(historical.received).toHaveLength(1)
   })
 })
 
@@ -214,7 +134,7 @@ describe('pollChat cursor', () => {
       async send() { return { msgId: 'srv', deduped: false } },
     } as unknown as BridgeClient
     const ctx = {
-      state: { get: () => cursor, set: (_key: unknown, value: string | undefined) => { cursor = value } },
+      state: { get: () => cursor, set: (_key: unknown, value: string) => { cursor = value } },
       receive: async (t: unknown) => { received.push(t) },
     } as unknown as SourceContext
     return { bridge, ctx, received, cursor: () => cursor }
@@ -242,6 +162,7 @@ describe('pollRound', () => {
   function context(people: { id: string }[] = []) {
     const received: unknown[] = []
     const store = new Map<string, unknown>()
+    store.set('chat-history:weixin:', '1')
     const ctx = {
       state: {
         get: (key: string) => store.get(key),

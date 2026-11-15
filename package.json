@@ -67,6 +67,7 @@
     "sidecar/weixin-ilink-bridge/LICENSE",
     "sidecar/weixin-ilink-bridge/lib/*.mjs",
     "sidecar/start-weixin-db.cmd",
+    "sidecar/start-weixin-db-team.cmd",
     "sidecar/start-weixin-ilink.cmd"
   ],
   "dsh": {

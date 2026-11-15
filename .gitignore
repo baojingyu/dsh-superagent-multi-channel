@@ -19,3 +19,5 @@ __pycache__/
 # Never commit a bearer token.
 secrets/
 *.tgz
+
+sidecar/weixin-db.log

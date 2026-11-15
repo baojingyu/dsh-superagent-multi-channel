@@ -114,6 +114,9 @@ const record = (value: unknown): Record<string, unknown> =>
   typeof value === 'object' && value !== null ? value as Record<string, unknown> : {}
 const text = (value: unknown): string => typeof value === 'string' ? value : ''
 
+/** WeChat system/service accounts are not people; they must not create direct-message triggers or refusal notices. */
+const SERVICE_SENDERS = new Set(['weixin', 'newsapp', 'filehelper', 'fmessage', 'qqmail', 'notifymessage', 'wechat'])
+
 /** Maps one `/messages` event to a ChatEvent, computing `mentionsAgent` from the structured `ats` list and the account's wxid. */
 function toChatEvent(raw: unknown, selfWxid: string): ChatEvent {
   const event = record(raw)
@@ -134,7 +137,7 @@ function toChatEvent(raw: unknown, selfWxid: string): ChatEvent {
     // The Thread is the room; a direct conversation's Thread is the person it is with.
     threadRoot: room || senderId,
     ...(quoteId ? { parentId: quoteId } : {}),
-    sender: { id: senderId, ...(senderName ? { name: senderName } : {}), bot: false },
+    sender: { id: senderId, ...(senderName ? { name: senderName } : {}), bot: sender.bot === true || SERVICE_SENDERS.has(senderId) },
     text: text(event.text),
     at: text(event.at),
     ...(event.own === true ? { ownMessage: true } : {}),

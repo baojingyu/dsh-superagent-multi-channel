@@ -15,7 +15,11 @@ setlocal
 
 rem --- set these for your machine -------------------------------------------
 set "NODE=node"
+rem Listening port: WXBRIDGE_PORT wins when set ("0" = let the OS pick a free
+rem port); otherwise the default 9300. WXBRIDGE_PORT_FILE is inherited from the
+rem environment by the child process, so it needs no handling here.
 set "PORT=9300"
+if not "%WXBRIDGE_PORT%"=="" set "PORT=%WXBRIDGE_PORT%"
 set "TOKEN_FILE=%~dp0..\secrets\ilinkbridge.token"
 set "AUTH_FILE=%~dp0weixin-ilink-bridge\data\weixin-ilink-auth.json"
 rem -------------------------------------------------------------------------

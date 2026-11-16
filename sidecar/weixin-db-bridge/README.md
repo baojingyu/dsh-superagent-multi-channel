@@ -124,10 +124,24 @@ python sidecar\weixin-db-bridge\selftest.py
 | `--account` | 指定账号目录名（默认按最近活动 + 密钥校验选择）。 |
 | `--wechatauto-path` | 未 `pip install` 时指向 `wechatauto-replica` 源码目录。 |
 | `--media-cache-ttl` | 媒体字节缓存秒数，默认 300。 |
+| `WXBRIDGE_PORT`（环境变量） | 期望端口；空=默认 `8788`，`0`=让操作系统分配空闲端口。优先于 `--port` 的默认值（启动脚本会把它透传为 `--port`）。 |
+| `WXBRIDGE_PORT_FILE`（环境变量） | 若设置（绝对路径），server 绑定成功后把**实际监听端口**的十进制文本写入该文件（每次启动覆盖）；父目录不存在会自动创建。`--port 0` 时用它拿到真实端口。 |
 
 Windows 一键启动器：`sidecar\start-weixin-db.cmd`（读取 `WXBRIDGE_TOKEN`，可用
 `WECHATAUTO_VENV` 指定 venv、`WECHATAUTO_PATH` 指定源码目录）。切 team 档位有两种方式：
 命令行追加 `--profile team`（`%*` 原样透传），或设 `set WXBRIDGE_PROFILE=team`。
+
+端口冲突时可让桥用随机空闲端口启动并回显真实地址：
+
+```bat
+set WXBRIDGE_PORT=0
+set WXBRIDGE_PORT_FILE=%TEMP%\dsh-weixin\bridge-team.port
+start-weixin-db.cmd
+rem 桥绑定后 bridge-team.port 里就是实际端口，例如 5 位十进制文本
+```
+
+`WXBRIDGE_PORT` 非空时启动脚本用 `--port %WXBRIDGE_PORT%`，否则默认 `8788`；
+`WXBRIDGE_PORT_FILE` 由子进程从环境继承，脚本无需重设。
 
 ## 4. 与 Node 侧对接
 

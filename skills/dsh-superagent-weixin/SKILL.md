@@ -26,3 +26,22 @@ ask for the panel's Check instead of guessing the image. Never print the token. 
 
 WeChat exposes no message deep link: quote the trigger reference rather than inventing a URL. If a required original cannot
 be read or downloaded, report that concrete limitation instead of guessing its content.
+
+## Connecting the channel (recommended configuration)
+
+Two profiles sit behind this one skill; the source card runs **one** of them, so pick one — either alone gives a working
+WeChat channel:
+
+- `personal` (default): Tencent iLink, bridge URL `http://127.0.0.1:9300`, any OS, direct messages only.
+- `team`: replica for dev groups, bridge URL `http://127.0.0.1:8788`, Windows only, needs desktop WeChat **4.1.12.55**.
+
+Defaults are already filled in and can be overridden: `baseUrl` follows the profile (9300 / 8788), `timeoutSeconds` is
+180 s (the `team` send path drives the desktop UI and is slower), `pollSeconds` is 5 s — you rarely type anything.
+
+- **`team` version button.** With `team` selected the card shows **安装指定版本微信(4.1.12.55)**; it opens
+  <https://github.com/Rodert/wechat-win-versions/releases/tag/v4.1.12.55> in the browser.
+- **Current bridge address.** If the chosen port is taken, the bridge starts on a free temporary port; the card's read-only
+  **当前桥地址 / Current bridge address** fact shows the effective `http://127.0.0.1:<port>`. Read `DSH_SUPERAGENT_WEIXIN_BRIDGE`
+  for the same address in a worker — do not assume 9300/8788 when a port clash occurred.
+- `autoReplies`, `acknowledge`, `ackText` and `progressAfterSeconds` are disabled and no longer appear in the panel; do not
+  present them as usable configuration.

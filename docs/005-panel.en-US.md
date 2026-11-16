@@ -25,6 +25,14 @@ Each Source is one card:
 
 Taking Yunxiao Projex as an example: authorization, status vocabulary, project space, token file, status write-back and the two **status dropdowns** (they show the board's names and store status IDs), polling interval, the attachment-comment switch, how many items to backfill on first sight, and the API site.
 
+### The WeChat source card
+
+- **Pick a profile first.** "运行 profile" (Profile) is `personal` (personal iLink, bridge URL 9300, any OS, direct messages only) or `team` (replica for dev groups, bridge URL 8788, needs Windows desktop WeChat 4.1.12+). **Either one alone gives you a working WeChat channel**; you do not run both.
+- **Defaults are filled in.** "桥地址" (Bridge URL) follows the profile (9300 / 8788), "桥请求超时" (Bridge request timeout) defaults to 180 s (the `team` send path drives UIA/OCR and is slower), and "轮询间隔" (Poll interval) defaults to 5 s. You rarely type anything, and every value can still be changed.
+- **A version prompt for `team`.** With `team` selected the card shows an **Install WeChat 4.1.12.55** button; clicking it opens <https://github.com/Rodert/wechat-win-versions/releases/tag/v4.1.12.55> in the browser, and the profile hint names the same version and link.
+- **Current bridge address.** If the port is taken, the bridge starts on a free temporary port; the card's read-only **Current bridge address** fact shows the actual `http://127.0.0.1:<port>`, so there is nothing to change by hand.
+- The dead fields `autoReplies / acknowledge / ackText / progressAfterSeconds` no longer appear in the panel (an old configuration still parses, but they are not offered as usable settings).
+
 ## Triggers
 
 - Lists every Trigger received in reverse time order: which Source/Thread it came from, who sent it, the strength of the judgement, which Ticket it went to, or why it was ignored.

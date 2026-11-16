@@ -100,6 +100,23 @@ python sidecar\weixin-db-bridge\selftest.py
 
 > 面板里每个 profile 就是「profile + 地址 + 启动器 + token 文件」四项：`profile` 选 personal/team，`baseUrl` 指向对应端口（personal=9300、team=8788），`bridgeLauncher` 指向对应 `.cmd`，`/health` 自报 `backend` 与 `capabilities`。
 
+### 4.3 端口约定：`WXBRIDGE_PORT` / `WXBRIDGE_PORT_FILE`（两 profile 通用）
+
+配置端口被占用时，可让桥用随机空闲端口启动，并把真实端口回显给面板/客户端。两个 sidecar 与两个启动器遵循同一套契约：
+
+- **`WXBRIDGE_PORT`**：期望端口。空=默认（db `8788` / ilink `9300`）；`0`=让操作系统分配空闲端口。启动脚本非空时把它透传为 `--port %WXBRIDGE_PORT%`。
+- **`WXBRIDGE_PORT_FILE`**：绝对路径；若设置，server **绑定成功后**把**实际监听端口**的十进制文本写入该文件（每次启动覆盖，父目录不存在会自动创建）。`--port 0` 时客户端靠它拿到真实端口。
+
+```bat
+rem 例：随机端口 + 端口文件（db sidecar）
+set WXBRIDGE_PORT=0
+set WXBRIDGE_PORT_FILE=%TEMP%\dsh-weixin\bridge-team.port
+sidecar\start-weixin-db.cmd
+rem 启动后 %TEMP%\dsh-weixin\bridge-team.port 内容即实际端口，如 "54321"
+```
+
+优先级统一为：`WXBRIDGE_PORT` 环境变量 > `--port`/脚本默认值；`WXBRIDGE_PORT_FILE` 由子进程从环境继承，脚本无需重设。启动日志打印的也是**实际监听端口**而非请求端口。
+
 ---
 
 ## 4.1 与官方飞书来源对齐的消息语义

@@ -73,6 +73,41 @@ def _serve(argv):
     return httpd, "http://127.0.0.1:%d" % port
 
 
+def run_port_file_check():
+    """--port 0 + WXBRIDGE_PORT_FILE：绑定成功后文件内容必须等于实际监听端口。"""
+    import shutil
+    import tempfile
+
+    tmpdir = tempfile.mkdtemp(prefix="wxbridge-port-")
+    port_file = os.path.join(tmpdir, "bridge.port")
+    prev = os.environ.get("WXBRIDGE_PORT_FILE")
+    os.environ["WXBRIDGE_PORT_FILE"] = port_file
+    httpd = None
+    try:
+        args = bridge.parse_args(["--fake", "--port", "0", "--token", TOKEN, "--quiet"])
+        httpd = bridge.make_server(args, token=TOKEN, port=0)
+        actual = httpd.server_address[1]
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        content = ""
+        if os.path.exists(port_file):
+            with open(port_file, "r", encoding="utf-8") as handle:
+                content = handle.read().strip()
+        check("port-file 已创建", os.path.exists(port_file), "path=%s" % port_file)
+        check("port-file 内容=实际监听端口", content == str(actual),
+              "file=%r actual=%r" % (content, actual))
+        check("port-file 为正十进制整数", content.isdigit() and actual > 0,
+              "content=%r" % (content,))
+    finally:
+        if httpd is not None:
+            httpd.shutdown()
+            httpd.server_close()
+        if prev is None:
+            os.environ.pop("WXBRIDGE_PORT_FILE", None)
+        else:
+            os.environ["WXBRIDGE_PORT_FILE"] = prev
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 def main():
     global BASE_URL
     # 1) 只读档位（默认）：原有 54 项契约检查，/send 必须 501。
@@ -92,6 +127,9 @@ def main():
     finally:
         team.shutdown()
         team.server_close()
+
+    # 3) 端口文件：--port 0 + WXBRIDGE_PORT_FILE，文件内容须为实际监听端口。
+    run_port_file_check()
 
     sys.stdout.write("\n%d checks, %d failure(s)\n" % (CHECKS, len(FAILURES)))
     if FAILURES:

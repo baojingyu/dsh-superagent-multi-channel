@@ -927,7 +927,9 @@ async function main() {
     log: (m) => log(m),
   });
 
-  const port = Number(values.port ?? DEFAULT_PORT);
+  // 端口优先级：WXBRIDGE_PORT 环境变量（"0" 合法，交给 OS 分配）> --port > 默认。
+  const envPort = process.env.WXBRIDGE_PORT;
+  const port = envPort !== undefined && envPort !== "" ? Number(envPort) : Number(values.port ?? DEFAULT_PORT);
   const host = values.host ?? DEFAULT_HOST;
   const bridge = createBridge({
     client,
@@ -940,6 +942,11 @@ async function main() {
     minSendGapMs: values.minSendGapMs ?? 1000,
   });
   const { port: actual } = await bridge.start({ port, host });
+  const portFile = process.env.WXBRIDGE_PORT_FILE;
+  if (portFile) {
+    await mkdir(path.dirname(path.resolve(portFile)), { recursive: true });
+    await writeFile(portFile, String(actual), "utf8");
+  }
   log(`iLink bridge 已启动 http://${host}:${actual} backend=${BACKEND} version=${VERSION} token=set media=${values.mediaEnabled !== false}`);
   log(`health: curl -H "Authorization: Bearer <TOKEN>" http://${host}:${actual}/health`);
 

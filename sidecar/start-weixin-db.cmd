@@ -34,6 +34,11 @@ rem Optional: set WXBRIDGE_PROFILE=team (or readonly) to pick the profile withou
 rem editing the command line; an explicit --profile argument also passes through.
 set "PROFILE_ARG="
 if not "%WXBRIDGE_PROFILE%"=="" set "PROFILE_ARG=--profile %WXBRIDGE_PROFILE%"
+rem Listening port: WXBRIDGE_PORT wins when set ("0" = let the OS pick a free
+rem port); otherwise the default 8788. WXBRIDGE_PORT_FILE is inherited from the
+rem environment by the child process, so it needs no handling here.
+set "PORT=8788"
+if not "%WXBRIDGE_PORT%"=="" set "PORT=%WXBRIDGE_PORT%"
 rem -------------------------------------------------------------------------
 
 set "SERVER=%~dp0weixin-db-bridge\server.py"
@@ -61,6 +66,6 @@ if "%WXBRIDGE_TOKEN%"=="" (
 rem WechatautoDbBackend also reads WECHATAUTO_PATH from the environment, so it
 rem needs no command-line flag here. Any extra args (including --profile team)
 rem pass through via %*.
-echo [weixin-db] %DATE% %TIME% starting pc-db on http://127.0.0.1:8788 profile=%WXBRIDGE_PROFILE% >>"%LOG%"
-"%PY%" "%SERVER%" --port 8788 %PROFILE_ARG% %* >>"%LOG%" 2>&1
+echo [weixin-db] %DATE% %TIME% starting pc-db on http://127.0.0.1:%PORT% profile=%WXBRIDGE_PROFILE% >>"%LOG%"
+"%PY%" "%SERVER%" --port %PORT% %PROFILE_ARG% %* >>"%LOG%" 2>&1
 echo [weixin-db] %DATE% %TIME% stopped, exit=%ERRORLEVEL% >>"%LOG%"

@@ -4,7 +4,7 @@
 
 **把飞书、GitHub、微信、企业微信、钉钉、阿里云云效 Projex 接成同一套「评估 → 工单 → 执行 → 回复」闭环的 DSH 插件。**
 
-版本 `2.4.0` · 测试 102 文件 / 1624 通过 · 许可 MIT · 与官方 `dsh-superagent` 并存安装
+版本 `2.5.0` · 测试 102 文件 / 1624 通过 · 许可 MIT · 与官方 `dsh-superagent` 并存安装
 
 > 本仓库是官方开源 superagent 的扩展：官方两种来源（飞书、GitHub）保留原样，**新增**微信个人号、企业微信、钉钉与云效 Projex，并把它们对齐到同一套能力面（接收范围、授权名单、会话上下文、worker 读原文、检索、名称刷新、回复与回写）。逐项对照见 [能力矩阵](docs/extensions/capability-matrix.md)。
 
@@ -107,6 +107,19 @@
 - **共存**：ilink 无 UI 依赖，只读 pc-db 也不碰桌面 UI，两者都不驱动界面；同一账号同一时刻只允许一个实例持有登录态/解密密钥，ilink 是 Bot 身份、不能与桌面端对同一会话双发。
 - **4.1.12.55 结论**：该版把微信 4.x 的 Qt 无障碍 gate 默认关掉（`mmui` 树冷启动不物化）。`wechatauto` 自带热激活，`team` 的 pc-db DB 只读在 4.1.12.55 **全通、可上生产**；`personal` 的 ilink 不受客户端版本影响。详见 [compat-4.1.12.55 报告](docs/research/compat-4.1.12.55.md) 与 [sidecar/README](sidecar/README.md)。
 
+### 怎么选后端（任选其一即可）
+
+在来源卡片里选 `personal` **或** `team`——任选一个 profile 就能用微信通道，不必两个都跑。卡片已经把这套配置填好：
+
+- **默认值已备好**：`baseUrl` 随 profile 自动（`personal` 为 `http://127.0.0.1:9300`，`team` 为 `http://127.0.0.1:8788`）；
+  `timeoutSeconds` 默认 180 秒（`team` 的发送走桌面 UI，较慢）；`pollSeconds` 默认 5 秒。多数参数不必手填，且都能改。
+- **`team` 需要微信 4.1.12.55**：选中 `team` 后卡片会出现 **安装指定版本微信(4.1.12.55)** 按钮，点击即在浏览器打开
+  <https://github.com/Rodert/wechat-win-versions/releases/tag/v4.1.12.55>。
+- **端口被占用也不怕**：所选端口被占用时，桥会用系统分配的空闲端口启动；卡片上只读的 **当前桥地址** 会显示实际的
+  `http://127.0.0.1:<端口>`，无需手工改端口。
+- **已停用的开关不再出现**：`autoReplies`、`acknowledge`、`ackText`、`progressAfterSeconds` 不再出现在面板；关键词固定回复、
+  评估前回执、「处理中」提醒都不属于这条通道。
+
 > 完整背景与「为什么」见 [能力矩阵](docs/extensions/capability-matrix.zh-CN.md)。
 
 ## 面板导览
@@ -185,12 +198,12 @@ pnpm test               # vitest run --maxWorkers=2
 pnpm build              # tsdown，8 个入口
 ```
 
-最近一次全量回归（2026-11-14，2.4.0）：
+最近一次全量回归（2026-11-16，2.5.0）：
 
 ```
 tsc --noEmit   → 0
-vitest         → 102 files passed / 5 skipped (107)
-                 1624 passed / 41 skipped (1665)   0 failed
+vitest         → 103 files passed / 5 skipped (108)
+                 1647 passed / 41 skipped (1688)   0 failed
 tsdown         → Build complete
 ```
 

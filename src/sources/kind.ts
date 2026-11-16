@@ -128,8 +128,12 @@ export interface SourceKind<C extends Record<string, unknown> = Record<string, u
   kind: string
   title: Localized
   description: Localized
-  /** Read-only status facts derived from `deployment` (undefined while waiting for setup), keyed by field key. */
-  facts?(deployment: Deployment | undefined): Record<string, Localized | string>
+  /**
+   * Read-only status facts derived from `deployment` (undefined while waiting for setup), keyed by field key. A kind that needs
+   * its current configuration to resolve a fact (such as the effective bridge address after a random-port start) may read the
+   * optional `config` the caller has in hand.
+   */
+  facts?(deployment: Deployment | undefined, config?: Record<string, unknown>): Record<string, Localized | string>
   /** Validates stored and submitted configuration and fills defaults. */
   schema: z.ZodType<C>
   fields: FieldSpec[]

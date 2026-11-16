@@ -44,6 +44,14 @@
 
 **4.1.12.55 结论**：该版把微信 4.x 的 Qt 无障碍 gate 默认关掉（`mmui` 树冷启动不物化）。`wechatauto` 自带热激活，故 **`team`（replica）的 DB 只读在 4.1.12.55 全通、可上生产**，其 `--profile team` 发送走 UIA/OCR；`personal`（iLink）不受客户端版本影响；`wxautox4` 无热激活，冷启动 attach 失败，故不作为发布后端（详见 `docs/research/compat-4.1.12.55.md`）。启动、互斥与版本要求见 `sidecar/README.md`。
 
+### 选一个 profile、它的默认值，以及桥地址
+
+- **任选其一即可**：一张来源卡片跑 `personal` **或** `team`，单跑其一就能用微信通道，从不两个同时跑。
+- **默认值随 profile**：`baseUrl` 默认 `personal` = `http://127.0.0.1:9300`、`team` = `http://127.0.0.1:8788`；`timeoutSeconds` 默认 180 秒（`team` 的发送走桌面 UI，较慢）；`pollSeconds` 默认 5 秒。多数参数不用手填，且都能改。
+- **`team` 有版本按钮**：选中 `team` 会出现 **安装指定版本微信(4.1.12.55)** 按钮，点击在浏览器打开 <https://github.com/Rodert/wechat-win-versions/releases/tag/v4.1.12.55>。
+- **端口占用有兜底**：所选端口被占用且占用者不是本桥时，sidecar 会用系统分配的空闲端口启动；面板只读的 **当前桥地址** fact 显示实际生效的 `http://127.0.0.1:<端口>`，无需手改端口。
+- **停用字段已移除**：`autoReplies`、`acknowledge`、`ackText`、`progressAfterSeconds` 不再在卡片上渲染。schema 保留它们的旧默认值以便旧配置仍能解析，但它们不是可用配置。
+
 ## 平台限制，以及为什么它们不是 bug
 
 - 微信、企业微信与钉钉**没有深链**：三者都不暴露按消息的 URL；面板只报出来源。

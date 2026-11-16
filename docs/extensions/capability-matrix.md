@@ -45,6 +45,14 @@ The **WeChat** column above describes the WeChat source's general capability sur
 
 **4.1.12.55 finding**: this build turns the WeChat 4.x Qt accessibility gate off by default (the `mmui` tree is not materialised on a cold start). `wechatauto` ships hot activation, so **`team` (replica)'s DB read passes fully on 4.1.12.55 and is production-ready**, and its `--profile team` send goes through UIA/OCR; `personal` (iLink) is client-version independent; `wxautox4` has no hot activation and fails to attach on a cold start, so it is not a release backend (see `docs/research/compat-4.1.12.55.md`). Startup, exclusion and version requirements are in `sidecar/README.md`.
 
+### Choosing one profile, its defaults, and the bridge address
+
+- **Either profile is enough.** A source card runs `personal` **or** `team`; one of them alone gives you the WeChat channel. You never run both at once.
+- **Defaults follow the profile.** `baseUrl` defaults to `http://127.0.0.1:9300` for `personal` and `http://127.0.0.1:8788` for `team`; `timeoutSeconds` defaults to 180 s (the `team` send path drives the desktop UI and is slower); `pollSeconds` defaults to 5 s. Most of the card needs no typing, and every default is overridable.
+- **`team` shows a version button.** Selecting `team` surfaces an **Install WeChat 4.1.12.55** button that opens <https://github.com/Rodert/wechat-win-versions/releases/tag/v4.1.12.55> in the browser.
+- **A busy port is handled.** If the chosen port is taken by something that is not this bridge, the sidecar starts on a free OS-assigned port; the panel's read-only **Current bridge address** fact shows the effective `http://127.0.0.1:<port>`, so no one edits the port by hand.
+- **Dead fields are gone.** `autoReplies`, `acknowledge`, `ackText` and `progressAfterSeconds` no longer render on the card. The schema keeps their old defaults so a stored configuration still parses; they are not usable settings.
+
 ## Platform limits, and why they are not bugs
 
 - **No deep link** on WeChat, WeCom and DingTalk: none of the three exposes a per-message URL; the panel names the Source.

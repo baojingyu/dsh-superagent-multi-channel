@@ -5,7 +5,7 @@
 **A DSH plugin that wires Feishu, GitHub, WeChat, WeCom, DingTalk and Alibaba Cloud Yunxiao Projex into one
 assess → ticket → execute → reply loop.**
 
-Version `2.4.0` · 102 test files / 1,624 passing · MIT · installs beside the official `dsh-superagent`
+Version `2.5.0` · 103 test files / 1,647 passing · MIT · installs beside the official `dsh-superagent`
 
 > An extension of the official open-source superagent: the two official sources (Feishu, GitHub) stay as they are, and
 > WeChat, WeCom, DingTalk and Yunxiao Projex are **added** and aligned to the same capability surface (reception scope,
@@ -118,6 +118,22 @@ One WeChat source serves two profiles behind the frozen contract; the Node side 
 - **Coexistence**: ilink has no UI dependency and read-only pc-db does not touch the desktop UI, so either can run without driving the interface; `team`'s send path (UIA/OCR) does drive it, so one UI-automation client per account; only one instance may hold the account login/decryption keys at a time, and ilink is a Bot identity that cannot double-send to the same conversation as a desktop client.
 - **4.1.12.55 finding**: this build turns the WeChat 4.x Qt accessibility gate off by default (the `mmui` tree is not materialised on a cold start). `wechatauto` ships hot activation, so `team`'s replica DB read passes fully on 4.1.12.55 and **can go to production** (its `--profile team` send uses UIA/OCR); `personal`'s ilink is client-version independent. See the [compat-4.1.12.55 report](docs/research/compat-4.1.12.55.md) and [sidecar/README](sidecar/README.md).
 
+### Choosing a backend (either one is enough)
+
+Pick `personal` **or** `team` in the source card — either profile alone gives you a working WeChat channel; you do not run
+both. The card already carries what each profile needs:
+
+- **Defaults are filled in.** `baseUrl` follows the profile automatically (`http://127.0.0.1:9300` for `personal`,
+  `http://127.0.0.1:8788` for `team`); `timeoutSeconds` is 180 s (the `team` send path drives the desktop UI and is
+  slower); `pollSeconds` is 5 s. You rarely type anything, and every value can still be changed.
+- **`team` wants WeChat 4.1.12.55.** With `team` selected the card shows an **Install WeChat 4.1.12.55** button; clicking it opens
+  <https://github.com/Rodert/wechat-win-versions/releases/tag/v4.1.12.55> in the browser.
+- **A busy port is not a problem.** If the chosen port is taken, the bridge starts on a free OS-assigned port; the card's
+  read-only **Current bridge address** fact shows the actual `http://127.0.0.1:<port>`, so there is nothing to change by
+  hand.
+- **Dead switches are gone.** `autoReplies`, `acknowledge`, `ackText` and `progressAfterSeconds` no longer appear in the
+  panel; canned replies, a pre-assessment receipt and "still working" notes are not part of this channel.
+
 > Full background and the "why" live in the [capability matrix](docs/extensions/capability-matrix.md).
 
 ## Panel tour
@@ -193,7 +209,7 @@ pnpm test        # vitest run --maxWorkers=2
 pnpm build       # tsdown, eight entries
 ```
 
-Latest full regression (2026-11-14, 2.4.0): `tsc` 0; **102 files passed / 5 skipped, 1,624 passed / 41 skipped, 0 failed**;
+Latest full regression (2026-11-16, 2.5.0): `tsc` 0; **103 files passed / 5 skipped, 1,647 passed / 41 skipped, 0 failed**;
 `tsdown` build complete.
 
 ## License

@@ -99,7 +99,8 @@ node selftest.mjs
 
 | 参数 | 环境变量 | 默认 | 说明 |
 |---|---|---|---|
-| `--port` | — | `9300` | HTTP 端口 |
+| `--port` | `WXBRIDGE_PORT` | `9300` | HTTP 端口；`WXBRIDGE_PORT` 优先（`0`=让 OS 分配空闲端口）。 |
+| — | `WXBRIDGE_PORT_FILE` | — | 若设置（绝对路径），绑定成功后把**实际监听端口**写入该文件（每次启动覆盖，父目录自动创建）。 |
 | `--host` | — | `127.0.0.1` | 绑定地址（**勿改成 0.0.0.0**） |
 | `--token` / `--token-file` | `ILINK_BRIDGE_TOKEN` | — | HTTP Bearer token（**必填**，建议用文件） |
 | `--auth-file` | `ILINK_BRIDGE_AUTH_FILE` | `./data/weixin-ilink-auth.json` | 扫码凭证文件 |
@@ -110,6 +111,18 @@ node selftest.mjs
 | `--poll-idle-ms` | — | `300` | 长轮询空转间隔（避免 mock/异常空响应忙等） |
 | `--media-cache-ttl` | — | `300` | `/media` 解密字节缓存秒数 |
 | `--min-send-gap-ms` | — | `1000` | 相邻两次 `/send` 最小间隔（契约 §6） |
+
+端口冲突时可随机端口启动并回显实际地址：
+
+```bat
+set WXBRIDGE_PORT=0
+set WXBRIDGE_PORT_FILE=%TEMP%\dsh-weixin\bridge-personal.port
+start-weixin-ilink.cmd
+rem 绑定后实际端口写入 bridge-personal.port（十进制文本）
+```
+
+端口优先级：`WXBRIDGE_PORT` 环境变量（`"0"` 合法）> `--port` > 默认 `9300`。
+`WXBRIDGE_PORT_FILE` 由子进程继承，脚本无需重设。
 
 ---
 

@@ -3,6 +3,32 @@
 Versions follow semantic versioning; each release is published to the plugin market under the package name
 `dsh-superagent-multi-channel`, so a user upgrades by installing the new version.
 
+## 2.5.0
+
+The WeChat panel is smaller, the defaults fit each profile, and a chosen port no longer has to be free: pick
+`personal` or `team`, and the channel runs, with the real bridge address shown.
+
+- **Panel trimmed.** Four long-dead fields leave the WeChat source card: `autoReplies`, `acknowledge`, `ackText` and
+  `progressAfterSeconds` no longer render. Canned keyword replies, a pre-assessment receipt and "still working" notes
+  are not part of this channel, so the panel stops offering them; the schema keeps their old defaults only so a stored
+  configuration still parses (`.strict()`), not as usable settings.
+- **Defaults follow the profile.** `baseUrl` defaults to the profile's own loopback (`http://127.0.0.1:9300` for
+  `personal`, `http://127.0.0.1:8788` for `team`); `timeoutSeconds` defaults to 180 s because the `team` send path drives
+  the client UI (UIA/OCR) and is slower; `pollSeconds` stays 5 s. Most of the card needs no typing, and every default is
+  still overridable.
+- **A version button for `team`.** Choosing `team` shows an **Install WeChat 4.1.12.55** button
+  whose action opens <https://github.com/Rodert/wechat-win-versions/releases/tag/v4.1.12.55> in the browser; the profile
+  hint names the same build and link, because `team`'s replica read is certified on that build.
+- **Random port, real address.** When the configured port is already taken by something that is not this bridge, the
+  launcher starts the sidecar on an OS-chosen free port (`WXBRIDGE_PORT=0`); the start script passes the port through and
+  the sidecar writes the port it actually bound to `WXBRIDGE_PORT_FILE`, which the plugin reads back. A new read-only
+  **Current bridge address** fact shows the effective `http://127.0.0.1:<port>` in use, so a port clash needs no manual
+  edit.
+- **Fixes.** The bridge URL, the start/stop/restart actions, the health check and the polling loop all resolve the
+  *effective* address (the port file, when a launcher wrote one), so a random port reaches every path instead of only the
+  one that started it; the panel copy for `profile`, `baseUrl` and the launcher now states one launcher per profile and
+  the matching port.
+
 ## 2.4.0
 
 The WeChat channel now carries what the Feishu channel carries for the agent: it can read the original conversation, and

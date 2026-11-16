@@ -4,8 +4,11 @@
  * a task name.
  */
 import { describe, expect, it } from 'vitest'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
 import type { SourceHost } from '../src/sources/host.ts'
-import { WeixinConfigSchema, weixinKind } from '../src/sources/chat/weixin/kind.ts'
+import { WeixinConfigSchema, portFilePath, resolveBaseUrl, startLauncher, weixinKind } from '../src/sources/chat/weixin/kind.ts'
 
 const action = (id: string) => weixinKind.actions!.find(item => item.id === id)!
 
@@ -20,8 +23,20 @@ function hostOf(calls: string[][]): SourceHost {
 const config = WeixinConfigSchema.parse({ tokenFile: '/tmp/weixin.token', selfWxid: 'wxid_self' })
 
 describe('WeChat bridge actions', () => {
-  it('offers start, stop, restart and check', () => {
-    expect(weixinKind.actions!.map(item => item.id)).toEqual(['bridge.start', 'bridge.stop', 'bridge.restart', 'bridge.check'])
+  it('offers start, stop, restart, check, and the pinned-WeChat installer', () => {
+    expect(weixinKind.actions!.map(item => item.id))
+      .toEqual(['bridge.start', 'bridge.stop', 'bridge.restart', 'bridge.check', 'wechat.install-version'])
+  })
+
+  it('opens the pinned WeChat 4.1.12.55 download page with powershell Start-Process, only for team', async () => {
+    const calls: string[][] = []
+    const message = await action('wechat.install-version').run(hostOf(calls), { ...config, profile: 'team' })
+    // `&` must not reach cmd; Start-Process is the safe opener, and the URL is the only argument that carries meaning.
+    expect(calls).toEqual([['powershell', '-NoProfile', '-NonInteractive', '-Command',
+      "Start-Process 'https://github.com/Rodert/wechat-win-versions/releases/tag/v4.1.12.55'"]])
+    expect(message).toContain('4.1.12.55')
+    expect(action('wechat.install-version').ready!({ ...config, profile: 'team' })).toBe(true)
+    expect(action('wechat.install-version').ready!({ ...config, profile: 'personal' })).toBe(false)
   })
 
   it('starts by asking the configured task to run, with a fixed argv', async () => {
@@ -89,5 +104,43 @@ describe('WeChat bridge actions', () => {
     } as unknown as SourceHost
     // Without a reachable bridge the check fails rather than claiming success, whatever the reason (missing token, refused port).
     await expect(action('bridge.check').run(host, config)).rejects.toThrow()
+  })
+})
+
+describe('startLauncher and the random-port contract', () => {
+  it('resolves the real port from the launcher port file, else the configured URL', () => {
+    const baseUrl = 'http://127.0.0.1:9401'
+    const file = portFilePath('personal', baseUrl)
+    // No launcher -> the configured URL is used as-is.
+    expect(resolveBaseUrl({ profile: 'personal', baseUrl })).toBe(baseUrl)
+    // A launcher but no port file yet -> still the configured URL.
+    expect(resolveBaseUrl({ profile: 'personal', baseUrl, bridgeLauncher: 'C:\\x\\start.cmd' })).toBe(baseUrl)
+    // Once the sidecar writes the port it actually bound, readers follow it.
+    mkdirSync(dirname(file), { recursive: true })
+    writeFileSync(file, '6001\n')
+    try {
+      expect(resolveBaseUrl({ profile: 'personal', baseUrl, bridgeLauncher: 'C:\\x\\start.cmd' }))
+        .toBe('http://127.0.0.1:6001')
+    } finally { rmSync(file, { force: true }) }
+  })
+
+  it('spawns the launcher detached and returns the port it wrote back', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-weixin-test-'))
+    const launcher = join(dir, 'start.cmd')
+    // A stand-in sidecar: it honours the port-file contract by writing the port it "bound".
+    writeFileSync(launcher, '@echo off\r\n> "%WXBRIDGE_PORT_FILE%" echo 54321\r\n')
+    const config = { ...WeixinConfigSchema.parse({ tokenFile: '/tmp/weixin.token', selfWxid: 'wxid_self' }), bridgeLauncher: launcher }
+    try {
+      const started = await startLauncher(hostOf([]), config)
+      expect(started?.port).toBe(54321)
+      // The port file the launcher wrote is what the readers now resolve to.
+      expect(resolveBaseUrl(config)).toBe('http://127.0.0.1:54321')
+    } finally {
+      // The detached cmd child keeps the temp dir as its cwd for a moment after it exits;
+      // give it a beat and retry the delete so Windows stops reporting EBUSY.
+      await new Promise(resolve => setTimeout(resolve, 500))
+      rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+      rmSync(portFilePath('personal', 'http://127.0.0.1:9300'), { force: true, maxRetries: 20, retryDelay: 100 })
+    }
   })
 })

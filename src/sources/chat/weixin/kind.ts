@@ -1,7 +1,9 @@
 /** Weixin Source kind: group messages judged by structured `@`, echo-idempotent replies through the sidecar bridge, and its environment. */
 import { spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { createServer } from 'node:net'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
 import { z } from 'zod'
 import { key, type OutboundMessage } from '../../../core/index.ts'
 import { KV } from '../../../kv.ts'
@@ -21,7 +23,7 @@ const WXID_PATTERN = /^[A-Za-z0-9_-]+$/
  */
 export function weixinBridge(config: Record<string, unknown>): BridgeClient {
   const parsed = WeixinConfigSchema.parse(config)
-  return createBridgeClient({ baseUrl: parsed.baseUrl, tokenFile: parsed.tokenFile, timeoutMs: parsed.timeoutSeconds * 1000 })
+  return createBridgeClient({ baseUrl: resolveBaseUrl(parsed), tokenFile: parsed.tokenFile, timeoutMs: parsed.timeoutSeconds * 1000 })
 }
 
 /** Chats the Source receives; `id` is the stable chatroom ID, never the display name. */
@@ -42,8 +44,12 @@ export const WeixinConfigSchema = z.object({
    * and @ group members. It records the profile and drives the field hints; the bridge URL and the launcher still decide the real backend.
    */
   profile: z.enum(['personal', 'team']).default('personal'),
-  /** Loopback address of the WeChat sidecar: personal = weixin-ilink-bridge on 9300, team = weixin-db-bridge on 8788; never beyond 127.0.0.1. */
-  baseUrl: z.url().default('http://127.0.0.1:9300'),
+  /**
+   * Loopback address of the WeChat sidecar. Kept optional in the stored config: the schema fills it from `profile` after parsing
+   * (personal = weixin-ilink-bridge on 9300, team = weixin-db-bridge on 8788), so a fresh install needs no typed URL while an
+   * operator can still override it. Never beyond 127.0.0.1.
+   */
+  baseUrl: z.url().optional(),
   /** Path of the file holding the sidecar's bearer token; it must be readable only by this account (mode 0600). */
   tokenFile: z.string().trim().min(1),
   /** The agent's own wxid: what group `@`s and own messages are judged against. */
@@ -76,9 +82,10 @@ export const WeixinConfigSchema = z.object({
   /**
    * How long one bridge request may take, in seconds. The default is generous because some endpoints
    * drive the client's own UI: listing chats enumerates the contact pages, which costs ~10 s on a busy
-   * account. Too small a value looks like "the bridge did not answer" while it is still working.
+   * account. Too small a value looks like "the bridge did not answer" while it is still working. 180 s also covers the team
+   * profile's slower UIA + OCR sends.
    */
-  timeoutSeconds: z.number().int().min(5).max(300).default(30),
+  timeoutSeconds: z.number().int().min(5).max(300).default(180),
   /** Phrases that admit a group message without an `@`. Matched case-insensitively inside the text. */
   keywords: z.array(z.object({ any: z.string().trim().min(1).max(50) }).strict()).default([]),
   /** Whether a ticket's model may send a file from its working directory to this conversation. */
@@ -106,7 +113,12 @@ export const WeixinConfigSchema = z.object({
   voice: z.boolean().default(true),
   /** Whether images are fetched as attachments; off keeps the `[图片]` placeholder and downloads nothing. */
   images: z.boolean().default(true),
-}).strict()
+}).strict().transform(config => ({
+  // Fill the bridge URL from the chosen profile after validation, so an install works with no typed address yet the operator can
+  // still override it. `profile` is already defaulted to `personal` by the inner parse, so a bare config still resolves to 9300.
+  ...config,
+  baseUrl: config.baseUrl ?? (config.profile === 'team' ? 'http://127.0.0.1:8788' : 'http://127.0.0.1:9300'),
+}))
 export type WeixinConfig = z.infer<typeof WeixinConfigSchema>
 
 /** The first configured keyword the text names, case-insensitively; `undefined` when none does. */
@@ -157,32 +169,145 @@ async function schtasks(host: SourceHost, task: string, verb: '/run' | '/end', s
 /** Absolute path of the launcher, or empty when the panel has not been given one. */
 const launcherOf = (config: Record<string, unknown>): string => String(config.bridgeLauncher ?? '').trim()
 
+/** Profile-resolved default bridge URL, used when a raw config record carries no `baseUrl` (the schema fills it after parsing). */
+const DEFAULT_BASE_URL: Record<string, string> = { personal: 'http://127.0.0.1:9300', team: 'http://127.0.0.1:8788' }
+
+/** The configured base URL, defaulting by profile when absent. */
+const baseUrlOf = (config: Record<string, unknown>): string => {
+  const profile = String(config.profile ?? 'personal')
+  return String(config.baseUrl ?? '') || (DEFAULT_BASE_URL[profile] ?? DEFAULT_BASE_URL.personal!)
+}
+
+/** The port a base URL asks for, defaulting by profile when the URL omits one. */
+function portOf(baseUrl: string, profile: string): number {
+  try {
+    const parsed = Number(new URL(baseUrl).port)
+    if (Number.isInteger(parsed) && parsed > 0) return parsed
+  } catch { /* fall through to the profile default */ }
+  return profile === 'team' ? 8788 : 9300
+}
+
+/**
+ * Path of the runtime port file for one bridge. The launcher's sidecar writes the port it actually bound here (via
+ * `WXBRIDGE_PORT_FILE`), so after a random-port start the panel can read the real address back. Kept under the temp dir - it is
+ * runtime state, never committed - and keyed by profile and base URL so two profiles on one machine never clobber each other.
+ */
+export function portFilePath(profile: string, baseUrl: string): string {
+  const sanitized = baseUrl.replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
+  return join(tmpdir(), 'dsh-weixin', `bridge-${profile}-${sanitized || 'default'}.port`)
+}
+
+/** Whether `port` is free on loopback right now, by trying to bind it (then releasing it at once). */
+function isPortFree(port: number): Promise<boolean> {
+  return new Promise(resolve => {
+    const server = createServer()
+    server.once('error', () => resolve(false))
+    server.once('listening', () => server.close(() => resolve(true)))
+    server.listen(port, '127.0.0.1')
+  })
+}
+
+/** PIDs listening on `port` over loopback, read from netstat (works after a DSH restart lost any in-memory state). */
+async function portPids(host: SourceHost, port: number, signal?: AbortSignal): Promise<string[]> {
+  const commands = host.context({ kind: SOURCE, health: ['weixin'] }).commands.withSignal(signal)
+  const listing = await commands.run('netstat', ['-ano', '-p', 'tcp']).catch(() => '')
+  const pattern = new RegExp(`127\\.0\\.0\\.1:${port}\\s+0\\.0\\.0\\.0:0\\s+LISTENING\\s+(\\d+)`, 'g')
+  return [...new Set([...String(listing).matchAll(pattern)].map(match => match[1]!))]
+}
+
+/** Whether the process listening on `port` is one of this project's WeChat bridges (by its command line), not a stranger. */
+async function isBridgePort(host: SourceHost, port: number, signal?: AbortSignal): Promise<boolean> {
+  const pids = await portPids(host, port, signal)
+  const commands = host.context({ kind: SOURCE, health: ['weixin'] }).commands.withSignal(signal)
+  for (const pid of pids) {
+    const commandLine = await commands.run('powershell', ['-NoProfile', '-NonInteractive', '-Command',
+      `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`]).catch(() => '')
+    if (/wxauto-bridge|weixin-(?:db|ilink)-bridge|server\.(?:py|mjs)/i.test(String(commandLine))) return true
+  }
+  return false
+}
+
+/**
+ * Reads the port file a launcher's sidecar writes, polling up to 20 s (250 ms apart). The sidecar binds first, then writes the
+ * number, so the file is the only honest source of the real port; a launcher that predates the contract never writes it and the
+ * configured port is returned as the fallback.
+ */
+async function waitPortFile(file: string, fallback: number): Promise<number> {
+  const deadline = Date.now() + 20_000
+  while (Date.now() < deadline) {
+    try {
+      const value = Number(readFileSync(file, 'utf8').trim())
+      if (Number.isInteger(value) && value > 0 && value <= 65535) return value
+    } catch { /* not written yet */ }
+    await new Promise(resolve => setTimeout(resolve, 250))
+  }
+  return fallback
+}
+
+/**
+ * The address every reader of this Source actually uses: the real port the launcher's sidecar bound (read from its port file) when
+ * a launcher is configured and the file exists, else the configured base URL. Cached by the port file's mtime so the polling loop
+ * and the panel do not stat/read it on every call, while a restarted bridge (new mtime) is picked up at once.
+ */
+const baseUrlCache = new Map<string, { mtimeMs: number; url: string }>()
+export function resolveBaseUrl(config: Record<string, unknown>): string {
+  const baseUrl = baseUrlOf(config)
+  if (launcherOf(config)) {
+    const profile = String(config.profile ?? 'personal')
+    const file = portFilePath(profile, baseUrl)
+    try {
+      const { mtimeMs } = statSync(file)
+      const cached = baseUrlCache.get(file)
+      if (cached && cached.mtimeMs === mtimeMs) return cached.url
+      const port = Number(readFileSync(file, 'utf8').trim())
+      if (Number.isInteger(port) && port > 0 && port <= 65535) {
+        const url = `http://127.0.0.1:${port}`
+        baseUrlCache.set(file, { mtimeMs, url })
+        return url
+      }
+    } catch { /* no port file yet: fall back to the configured URL */ }
+  }
+  return baseUrl
+}
+
 /**
  * Start the bridge through this machine's launcher. Detached and windowless, so it keeps running after DSH exits - which is the
  * whole point: a restarted DSH must not cost a UI re-attach. The argv is the launcher path alone: what it runs is the machine's
  * business, and stays out of the repository.
+ *
+ * Port contract: the launcher's sidecar reads `WXBRIDGE_PORT` (empty = its own default, `0` = an OS-chosen free port) and, when
+ * `WXBRIDGE_PORT_FILE` is set, writes the port it bound there. This deletes any stale port file, asks for a random port only when
+ * the configured one is taken by a process that is not our own bridge, then polls the port file back and returns the real port.
  */
-function startLauncher(config: Record<string, unknown>): number | undefined {
+export async function startLauncher(host: SourceHost, config: Record<string, unknown>): Promise<{ pid: number; port: number } | undefined> {
   const launcher = launcherOf(config)
   if (!launcher) return undefined
   if (!existsSync(launcher)) throw new Error(`桥启动器不存在：${launcher}`)
-  const options = { detached: true, stdio: 'ignore' as const, windowsHide: true, cwd: dirname(launcher) }
+  const profile = String(config.profile ?? 'personal')
+  const configuredUrl = baseUrlOf(config)
+  const desired = portOf(configuredUrl, profile)
+  const portFile = portFilePath(profile, configuredUrl)
+  mkdirSync(dirname(portFile), { recursive: true })
+  rmSync(portFile, { force: true })
+  // A random port only when the configured one is taken by a stranger; if our own bridge already holds it, keep the port.
+  const occupied = !(await isPortFree(desired))
+  const requestRandom = occupied && !(await isBridgePort(host, desired))
+  const env = { ...process.env, WXBRIDGE_PORT: requestRandom ? '0' : String(desired), WXBRIDGE_PORT_FILE: portFile }
+  const options = { detached: true, stdio: 'ignore' as const, windowsHide: true, cwd: dirname(launcher), env }
   // A .cmd/.bat is not an executable image; it runs through the command processor. The argv stays explicit either way, so nothing
   // in the path or arguments is re-parsed as shell syntax by this plugin.
   const child = /\.(cmd|bat)$/i.test(launcher)
     ? spawn(process.env.ComSpec ?? 'cmd.exe', ['/c', launcher], options)
     : spawn(launcher, [], options)
   child.unref()
-  return child.pid
+  const port = await waitPortFile(portFile, desired)
+  return { pid: child.pid ?? 0, port }
 }
 
-/** The PID listening on the bridge's own port, or none. Read from netstat so it works after a DSH restart lost any in-memory state. */
+/** The PIDs listening on the bridge's own port, or none. Reads the real port (which may be random) through resolveBaseUrl. */
 async function bridgePids(host: SourceHost, config: Record<string, unknown>, signal?: AbortSignal): Promise<string[]> {
-  const port = Number(new URL(String(config.baseUrl ?? 'http://127.0.0.1:9300')).port || 80)
-  const commands = host.context({ kind: SOURCE, health: ['weixin'] }).commands.withSignal(signal)
-  const listing = await commands.run('netstat', ['-ano', '-p', 'tcp'])
-  const pattern = new RegExp(`127\\.0\\.0\\.1:${port}\\s+0\\.0\\.0\\.0:0\\s+LISTENING\\s+(\\d+)`, 'g')
-  return [...new Set([...listing.matchAll(pattern)].map(match => match[1]!))]
+  const port = Number(new URL(resolveBaseUrl(config)).port || 80)
+  return portPids(host, port, signal)
 }
 
 /** Stop the bridge: end whatever listens on its port, but only if its own command line says it is the bridge. */
@@ -208,9 +333,11 @@ const Fields: FieldSpec[] = [
       { value: 'personal', label: { zh: '个人 iLink（默认，9300）', en: 'Personal iLink (default, 9300)' } },
       { value: 'team', label: { zh: '研发群 replica（8788）', en: 'Team replica (8788)' } },
     ],
-    hint: { zh: '这个微信 Source 面向谁：personal（默认）=个人 iLink 单聊助手（腾讯 iLink，start-weixin-ilink.cmd，桥地址 9300）；team=研发群 replica（weixin-db-bridge，start-weixin-db-team.cmd，桥地址 8788，需 Windows 桌面微信 4.1.12+）。team 默认只读；用 `--profile team` 启动后才发文本/文件/群@。它只记录 profile 与推荐配置，真正的后端仍由下面的「桥地址」和「桥启动器」决定。', en: 'Who this WeChat Source serves: personal (default) = personal iLink assistant (Tencent iLink, start-weixin-ilink.cmd, bridge URL 9300); team = replica for dev groups (weixin-db-bridge, start-weixin-db-team.cmd, bridge URL 8788, needs Windows desktop WeChat 4.1.12+). team is read-only until started with `--profile team`, which enables text/files/group @. It records the profile and its recommended settings; the Bridge URL and launcher below still decide the real backend.' } },
+    hint: { zh: '这个微信 Source 面向谁：personal（默认）=个人 iLink 单聊助手（腾讯 iLink，start-weixin-ilink.cmd，桥地址 9300）；team=研发群 replica（weixin-db-bridge，start-weixin-db-team.cmd，桥地址 8788，需 Windows 桌面微信 4.1.12+，可用 https://github.com/Rodert/wechat-win-versions/releases/tag/v4.1.12.55 安装指定版本）。team 默认只读；用 `--profile team` 启动后才发文本/文件/群@。它同时决定默认「桥地址」，但真正连哪个后端仍由下面的「桥地址」和「桥启动器」决定。', en: 'Who this WeChat Source serves: personal (default) = personal iLink assistant (Tencent iLink, start-weixin-ilink.cmd, bridge URL 9300); team = replica for dev groups (weixin-db-bridge, start-weixin-db-team.cmd, bridge URL 8788, needs Windows desktop WeChat 4.1.12+, install the pinned build from https://github.com/Rodert/wechat-win-versions/releases/tag/v4.1.12.55). team is read-only until started with `--profile team`, which enables text/files/group @. It also picks the default Bridge URL; the Bridge URL and launcher below still decide the real backend.' } },
   { key: 'baseUrl', type: 'text', advanced: true, label: { zh: '桥地址', en: 'Bridge URL' },
-    hint: { zh: '微信 sidecar 的 loopback 地址，只允许本机、不要填公网地址。按 profile 填：personal（默认）用 weixin-ilink-bridge 的 9300（腾讯 iLink，免费跨 OS，仅单聊个人助手）；team 用 weixin-db-bridge 的 8788（wechatauto 免费；默认只读，`--profile team` 可发文本/文件/群@）。地址指向哪个后端，就由哪个后端服务。', en: 'Loopback address of the WeChat sidecar; localhost only, never a public address. Fill by profile: personal (default) uses weixin-ilink-bridge on 9300 (Tencent iLink, free and cross-OS, personal-assistant DMs only); team uses weixin-db-bridge on 8788 (free wechatauto; read-only by default, `--profile team` enables text/files/group @). Whichever backend you point at serves this Source.' } },
+    hint: { zh: '微信 sidecar 的 loopback 地址，只允许本机、不要填公网地址。留空则按 profile 自动填：personal（默认）=weixin-ilink-bridge 的 9300（腾讯 iLink，免费跨 OS，仅单聊个人助手）；team=weixin-db-bridge 的 8788（wechatauto 免费；默认只读，`--profile team` 可发文本/文件/群@）。配置的端口被其它程序占用时，桥会用随机端口启动，实际地址看下面的「当前桥地址」。', en: 'Loopback address of the WeChat sidecar; localhost only, never a public address. Leave it blank to auto-fill by profile: personal (default) = weixin-ilink-bridge on 9300 (Tencent iLink, free and cross-OS, personal-assistant DMs only); team = weixin-db-bridge on 8788 (free wechatauto; read-only by default, `--profile team` enables text/files/group @). If the configured port is taken by another program the bridge starts on a random port; see Current bridge address below for the real one.' } },
+  { key: 'effectiveBaseUrl', type: 'fact', label: { zh: '当前桥地址', en: 'Current bridge address' },
+    hint: { zh: '只读：桥实际监听的地址。启动器存在且端口文件已写出时这里显示真实端口（可能是随机端口），否则显示上面的「桥地址」。', en: 'Read-only: the address the bridge is actually listening on. When a launcher is set and its port file exists this shows the real port (which may be random), otherwise the Bridge URL above.' } },
   { key: 'tokenFile', type: 'text', label: { zh: '桥 token 文件', en: 'Bridge token file' },
     hint: { zh: '保存 sidecar bearer token 的文件路径；文件权限必须是 0600，否则客户端拒绝读取。', en: 'Path of the file holding the sidecar bearer token; it must have mode 0600 or the client refuses to read it.' } },
   { key: 'selfWxid', type: 'text', pattern: '^[A-Za-z0-9_\\-]+$', label: { zh: '本账号 wxid', en: 'This account wxid' },
@@ -235,20 +362,8 @@ const Fields: FieldSpec[] = [
     columns: [
       { key: 'any', type: 'text', label: { zh: '关键词', en: 'Keyword' } },
     ] },
-  { key: 'autoReplies', type: 'rows', advanced: true, label: { zh: '关键词自动回复（兼容字段，已停用）', en: 'Canned keyword replies (compatibility field, disabled)' },
-    hint: { zh: '为对齐官方飞书来源，微信不再由轮询循环直接发固定回复；此字段仅保留旧配置兼容，当前不会发送任何内容。', en: 'To match the official Feishu source, WeChat no longer sends canned replies from the polling loop; this field is retained for old config compatibility and currently sends nothing.' },
-    columns: [
-      { key: 'any', type: 'text', label: { zh: '关键词', en: 'Keyword' } },
-      { key: 'reply', type: 'text', label: { zh: '回复内容', en: 'Reply' } },
-    ] },
   { key: 'sendFiles', type: 'switch', advanced: true, label: { zh: '允许模型回传文件', en: 'Let the model send files' },
     hint: { zh: '开启后，工单里的模型可以把它自己工作目录内的文件（≤20 MiB、非可执行文件）回传到这个会话。默认关闭——这等于给模型一条把文件发出去的通道。', en: 'When on, the model working a ticket may send a file from its own working directory (≤ 20 MiB, not an executable) to this conversation. Off by default: it is a channel for files to leave the machine.' } },
-  { key: 'acknowledge', type: 'switch', advanced: true, label: { zh: '收到就先回一句（兼容字段，已停用）', en: 'Acknowledge on receipt (compatibility field, disabled)' },
-    hint: { zh: '为对齐官方飞书来源，微信不再在评估前自动发「收到」；此字段仅保留旧配置兼容，当前不会发送回执。', en: 'To match the official Feishu source, WeChat no longer sends a receipt before assessment; this field is retained for old config compatibility and currently sends no receipt.' } },
-  { key: 'ackText', type: 'text', advanced: true, label: { zh: '回执内容（兼容字段，已停用）', en: 'Receipt text (compatibility field, disabled)' },
-    hint: { zh: '兼容旧配置；当前不会发送任何回执。', en: 'Compatibility only; no receipt is currently sent.' } },
-  { key: 'progressAfterSeconds', type: 'number', advanced: true, min: 0, max: 3600, label: { zh: '处理中提醒 / 秒（兼容字段，已停用）', en: 'Still-working note / s (compatibility field, disabled)' },
-    hint: { zh: '兼容旧配置；当前不会发送处理中提醒。', en: 'Compatibility only; no still-working note is currently sent.' } },
   { key: 'mentionBack', type: 'switch', advanced: true, label: { zh: '回复时 @ 发言人', en: 'Mention the sender in a reply' },
     hint: { zh: '仅对群聊生效：回复群里找机器人的那个人时带上 @，让对方确实收到提醒。私聊没有 @ 这一说，开了也不会带。', en: 'Groups only: a reply to the person who addressed the bot carries an @, so they are actually notified. A direct message has no mention to make, so this does nothing there.' } },
   { key: 'voice', type: 'switch', advanced: true, label: { zh: '转写语音消息', en: 'Transcribe voice messages' },
@@ -264,7 +379,7 @@ const Fields: FieldSpec[] = [
   { key: 'readPageSize', type: 'number', advanced: true, min: 1, max: 50, label: { zh: '每页消息数', en: 'Messages per page' },
     hint: { zh: '智能体读取会话和群历史时每页的消息数；桥的上限是 50。', en: 'Messages per page when agents read this conversation and its history; the bridge caps a page at 50.' } },
   { key: 'timeoutSeconds', type: 'number', advanced: true, min: 5, max: 300, label: { zh: '桥请求超时 / 秒', en: 'Bridge request timeout / s' },
-    hint: { zh: '单个桥请求最多等多久。有些端点要驱动客户端界面（例如列会话会翻联系人群组，忙时约 10 秒），这个值太小会被误报成「桥没有响应」。', en: 'How long one bridge request may take. Some endpoints drive the client UI - listing chats walks the contact pages and takes about 10 s on a busy account - so too small a value is reported as "the bridge did not answer".' } },
+    hint: { zh: '单个桥请求最多等多久，默认 180 秒（team 的 UIA/OCR 发送较慢，留足余量）。有些端点要驱动客户端界面（例如列会话会翻联系人群组，忙时约 10 秒），这个值太小会被误报成「桥没有响应」。', en: 'How long one bridge request may take; default 180 s (team UIA/OCR sends are slower, so keep headroom). Some endpoints drive the client UI - listing chats walks the contact pages and takes about 10 s on a busy account - so too small a value is reported as "the bridge did not answer".' } },
 ]
 
 const WeixinPolicySchema = z.object({
@@ -305,6 +420,13 @@ let remembered: { status: BridgeStatus; capabilities?: BridgeCapabilities } | un
 export function rememberWeixinStatus(status: BridgeStatus, capabilities?: BridgeCapabilities): void {
   remembered = { status, ...(capabilities ? { capabilities } : {}) }
 }
+/**
+ * The configuration the polling loop last saw. `facts` cannot await, so it resolves the effective bridge address (which may be a
+ * random port discovered at start time) from this record, kept fresh each poll.
+ */
+let lastConfig: Record<string, unknown> | undefined
+/** Records the configuration the polling loop last saw, so the synchronous `facts` can report the effective bridge address. */
+export function rememberWeixinConfig(config: Record<string, unknown> | undefined): void { lastConfig = config }
 
 /** Reception result of the weixin kind: ambient group messages stay observable for Thread context even when not listened. */
 type WeixinScopeResult =
@@ -326,7 +448,7 @@ const MENTION_FACTS: Record<MentionCapability, Localized> = {
 export function createWeixinKind(hooks: WeixinKindHooks = {}): SourceKind<WeixinConfig> {
   const bridgeFor = (config: WeixinConfig): BridgeClient =>
     hooks.client?.(config)
-      ?? createBridgeClient({ baseUrl: config.baseUrl, tokenFile: config.tokenFile, timeoutMs: config.timeoutSeconds * 1000 })
+      ?? createBridgeClient({ baseUrl: resolveBaseUrl(config), tokenFile: config.tokenFile, timeoutMs: config.timeoutSeconds * 1000 })
   /** What the backend last reported it can do; `undefined` while nothing has been read, which reads as capable. */
   const capabilitiesOf = (): BridgeCapabilities | undefined => hooks.capabilities ? hooks.capabilities() : remembered?.capabilities
   const policy: SourcePolicyPart<Record<string, unknown> & {
@@ -487,7 +609,7 @@ export function createWeixinKind(hooks: WeixinKindHooks = {}): SourceKind<Weixin
       values: ({ trigger, config }) => ({
         DSH_SUPERAGENT_WEIXIN_ROOM: trigger?.source === SOURCE ? String(trigger.meta.room ?? '') : '',
         DSH_SUPERAGENT_WEIXIN_SENDER: trigger?.source === SOURCE ? String(trigger.meta.senderId ?? trigger.actor.id) : '',
-        DSH_SUPERAGENT_WEIXIN_BRIDGE: trigger?.source === SOURCE ? String((config as WeixinConfig).baseUrl ?? '') : '',
+        DSH_SUPERAGENT_WEIXIN_BRIDGE: trigger?.source === SOURCE ? resolveBaseUrl(config as Record<string, unknown>) : '',
         DSH_SUPERAGENT_WEIXIN_TOKEN_FILE: trigger?.source === SOURCE ? String((config as WeixinConfig).tokenFile ?? '') : '',
       }),
     },
@@ -495,11 +617,17 @@ export function createWeixinKind(hooks: WeixinKindHooks = {}): SourceKind<Weixin
     // The second fact states how strong the mention proof is rather than hiding it: a `markup` backend reads the client's
     // own mention markup, which survives neither a renamed account nor a pasted separator, and an operator should know that
     // before treating a group `@` as authorization.
-    facts: () => {
+    facts: (_deployment: unknown, override?: Record<string, unknown>) => {
       const status = hooks.status ? hooks.status() : remembered?.status
       const account = status?.loggedIn ? { zh: `已登录：${status.name || status.wxid}`, en: `Signed in as ${status.name || status.wxid}` } : { zh: '未连接', en: 'Not connected' }
       const mentions = MENTION_FACTS[capabilitiesOf()?.mentions ?? 'structured']
-      return { account, mentions }
+      // The real bridge address is only known once a config exists; the polling loop records the last one it saw. A caller may pass
+      // an explicit config (the panel, or a test) to override the recorded one.
+      const config = override ?? lastConfig
+      const effectiveBaseUrl = config
+        ? { zh: `当前桥地址：${resolveBaseUrl(config)}`, en: `Current bridge address: ${resolveBaseUrl(config)}` }
+        : undefined
+      return { account, mentions, ...(effectiveBaseUrl ? { effectiveBaseUrl } : {}) }
     },
     // A backend without stable chat IDs names its chats and people `wxname_<hash>`, which keeps the id patterns strict at
     // the cost of being unreadable. This resolves them to display names for the panel's row keys, exactly as the Feishu
@@ -514,8 +642,8 @@ export function createWeixinKind(hooks: WeixinKindHooks = {}): SourceKind<Weixin
         hint: { zh: '让本机计划任务或启动器启动微信桥。需要对应后端就绪：personal=iLink 已扫码存好凭证，team=桌面微信 4.1.12+ 已登录。', en: 'Asks the machine task or launcher to start the WeChat bridge. Needs the matching backend ready: personal = iLink QR credential saved, team = signed-in desktop WeChat 4.1.12+.' },
         ready: config => !!launcherOf(config) || !!config.bridgeTask,
         run: async (host, config, signal) => {
-          const pid = startLauncher(config)
-          if (pid !== undefined) return `已启动桥（pid ${pid}）；几秒后点「检查桥」确认。`
+          const started = await startLauncher(host, config)
+          if (started) return `已启动桥（pid ${started.pid}，端口 ${started.port}）；几秒后点「检查桥」确认。`
           await schtasks(host, String(config.bridgeTask ?? ''), '/run', signal)
           return '已请求计划任务启动桥；几秒后点「检查桥」确认。'
         } },
@@ -533,8 +661,8 @@ export function createWeixinKind(hooks: WeixinKindHooks = {}): SourceKind<Weixin
         run: async (host, config, signal) => {
           if (launcherOf(config)) {
             await stopBridge(host, config, signal)
-            const pid = startLauncher(config)
-            return `已重启桥（pid ${pid}）；几秒后点「检查桥」确认。`
+            const started = await startLauncher(host, config)
+            return `已重启桥（pid ${started?.pid ?? '?'}，端口 ${started?.port ?? '?'}）；几秒后点「检查桥」确认。`
           }
           const task = String(config.bridgeTask ?? '')
           await schtasks(host, task, '/end', signal)
@@ -553,6 +681,15 @@ export function createWeixinKind(hooks: WeixinKindHooks = {}): SourceKind<Weixin
           const mentions = capability?.mentions === 'structured' ? '结构化 @' : capability?.mentions === 'markup' ? '仅 @ 标记' : '无法判定 @'
           return `桥正常（后端 ${health.backend ?? '?'}）：成员 ${roster}，@ 判定 ${mentions}。`
         } },
+      { id: 'wechat.install-version', label: { zh: '安装指定版本微信(4.1.12.55)', en: 'Install WeChat 4.1.12.55' },
+        hint: { zh: 'team 档需要桌面微信 4.1.12+。点此用默认浏览器打开该版本的下载页，安装并登录后再启动 team 桥。', en: 'The team profile needs desktop WeChat 4.1.12+. Opens that version\'s download page in the default browser; install, sign in, then start the team bridge.' },
+        ready: config => config.profile === 'team',
+        run: async (host, _config, signal) => {
+          const commands = host.context({ kind: SOURCE, health: ['weixin'] }).commands.withSignal(signal)
+          await commands.run('powershell', ['-NoProfile', '-NonInteractive', '-Command',
+            "Start-Process 'https://github.com/Rodert/wechat-win-versions/releases/tag/v4.1.12.55'"])
+          return '已打开微信 4.1.12.55 下载页；安装并登录桌面微信后，再点「启动桥」。'
+        } },
     ],
     async refreshLabels(host) {
       const ctx = host.context({ kind: SOURCE, health: ['weixin'] })
@@ -561,7 +698,7 @@ export function createWeixinKind(hooks: WeixinKindHooks = {}): SourceKind<Weixin
       // Refreshing the picker is a person pressing a button and waiting, so it may wait far longer than
       // a poll: the first listing can walk the contact pages, and giving up early leaves them with nothing.
       const bridge = hooks.client?.(config)
-        ?? createBridgeClient({ baseUrl: config.baseUrl, tokenFile: config.tokenFile, timeoutMs: Math.max(config.timeoutSeconds, 60) * 1000 })
+        ?? createBridgeClient({ baseUrl: resolveBaseUrl(config), tokenFile: config.tokenFile, timeoutMs: Math.max(config.timeoutSeconds, 60) * 1000 })
       const labels: Record<string, string> = {}
       for (const room of await bridge.rooms()) {
         if (room.name) labels[room.id] = room.name

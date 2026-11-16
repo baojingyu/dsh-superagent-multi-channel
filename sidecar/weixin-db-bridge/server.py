@@ -1232,6 +1232,14 @@ def make_server(args, backend=None, token=None, host=None, port=None) -> BridgeH
     server = BridgeHTTPServer((host, port), BridgeHandler, backend, token)
     server.quiet = args.quiet
     server.verbose = args.verbose
+    port_file = os.environ.get("WXBRIDGE_PORT_FILE")
+    if port_file:
+        actual_port = server.server_address[1]
+        directory = os.path.dirname(os.path.abspath(port_file))
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+        with open(port_file, "w", encoding="utf-8") as handle:
+            handle.write("%d" % actual_port)
     return server
 
 
@@ -1262,10 +1270,11 @@ def main(argv=None):
     args = parse_args(argv)
     token = resolve_token(args)
     server = make_server(args, token=token)
-    # token 值绝不打印：只说「已设置」。
+    # token 值绝不打印：只说「已设置」。端口用实际监听值（--port 0 时由 OS 分配）。
+    bound_host, bound_port = server.server_address[0], server.server_address[1]
     sys.stderr.write("[weixin-db-bridge] backend=%s profile=%s fake=%s token=set listening on http://%s:%d\n"
                      % (server.backend.name, getattr(server.backend, "profile", "readonly"),
-                        args.fake, args.host, args.port))
+                        args.fake, bound_host, bound_port))
     if not args.fake:
         available, detail = server.backend.probe()
         if available:

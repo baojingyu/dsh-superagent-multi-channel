@@ -2,7 +2,7 @@
 
 > 语言：[中文](README.md) · [English](README.en-US.md)
 
-**状态：`2.5.1` 已开源推送（2026-11-17）；npm 发布仍被本机 npm 登录状态阻塞，2.5.1 的 tarball 已产出并验证。**
+**状态：`2.5.2` 已发布到 npm 并开源推送（2026-11-17）。`2.5.1` 已废弃（npm 只写入元数据、未存 tarball，装不上）。**
 
 ## 已完成
 
@@ -31,7 +31,12 @@
 - [x] 包内容实机验证：`setInterval(reconcile`、`notReporting`、`healthCode.polling`、`resolveSecretPath` 均在产物中；
       `npm install <tgz>` 后 `dsh-superagent-multi-channel/projex-watch` 可加载，导出 `apply/inject/kind/name/supervise`，
       `supervise` 的 disposer 可正常回收
-- [ ] `npm publish`——**待本机 npm 登录**（见下）
+- [x] `npm publish` → `dsh-superagent-multi-channel@2.5.2`，`latest` 已指向 2.5.2
+      （`2.5.1` 首次发布时 npm 返回 `202 Accepted` 却只落元数据、没存 tarball，tarball URL 404、安装报 `ETARGET`；
+      已 `npm deprecate` 并改发同一内容、版本号 +1 的 2.5.2，实测 `npm install dsh-superagent-multi-channel@2.5.2` 成功）
+- [x] 从 npm 干净安装并冒烟：`dsh-superagent-multi-channel/projex-watch` 导出 `apply/inject/kind/name/supervise`，
+      `supervise` disposer 正常回收；产物含 `setInterval(reconcile`、`notReporting`、`healthCode.polling`、
+      `resolveSecretPath` 与 `fatal` 分支
 
 ## 阻塞项
 

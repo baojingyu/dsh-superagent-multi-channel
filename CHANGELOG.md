@@ -3,7 +3,16 @@
 Versions follow semantic versioning; each release is published to the plugin market under the package name
 `dsh-superagent-multi-channel`, so a user upgrades by installing the new version.
 
+## 2.5.2
+
+Identical to 2.5.1 in content. 2.5.1 is deprecated: npm accepted its metadata but never stored its tarball, so
+`npm install dsh-superagent-multi-channel@2.5.1` fails with `ETARGET` and the tarball URL returns 404. 2.5.2 is the same
+build with the version bumped, published cleanly; install that.
+
 ## 2.5.1
+
+A Source switched on while the plugin stays loaded starts polling, a Source nothing polls says so, and a credential path
+means the file the operator wrote.
 
 A Source switched on while the plugin stays loaded starts polling, a Source nothing polls says so, and a credential path
 means the file the operator wrote.

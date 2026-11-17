@@ -2,7 +2,7 @@
 
 > 语言：[中文](README.md) · [English](README.en-US.md)
 
-**状态：`2.5.2` 已发布到 npm 并开源推送（2026-11-17），`latest` 指向它；`2.5.1` 已废弃（发布后 packument 先于 tarball 可见，短时间内装不上）。**
+**状态：`2.5.3` 已发布到 npm 并开源推送（2026-11-17），`latest` 指向它；`2.5.2` 被它取代，`2.5.1` 已废弃（发布后 packument 先于 tarball 可见，短时间内装不上）。**
 
 ## 已完成
 
@@ -31,7 +31,8 @@
 - [x] 包内容实机验证：`setInterval(reconcile`、`notReporting`、`healthCode.polling`、`resolveSecretPath` 均在产物中；
       `npm install <tgz>` 后 `dsh-superagent-multi-channel/projex-watch` 可加载，导出 `apply/inject/kind/name/supervise`，
       `supervise` 的 disposer 可正常回收
-- [x] `npm publish` → `dsh-superagent-multi-channel@2.5.2`，`latest` 已指向 2.5.2
+- [x] `npm publish` → `dsh-superagent-multi-channel@2.5.3`，`latest` 已指向 2.5.3（官方 registry 实测可安装；npmmirror 镜像同步慢于官方，2.5.1 那次它直接跳过了该版本）
+- [x] `npm publish` → `dsh-superagent-multi-channel@2.5.2`，`latest` 曾指向 2.5.2
       （`2.5.1` 发布后数分钟内 packument 已可见但 tarball 仍 404，`npm install …@2.5.1` 报 `ETARGET`；两者后来都会收敛，
       但 npmmirror 镜像直接跳过了该版本。故发同一内容、版本号 +1 的 2.5.2，并把 2.5.1 标记 deprecated 指向它。
       实测 `npm install dsh-superagent-multi-channel@2.5.2` 在官方 registry 与默认镜像均成功）

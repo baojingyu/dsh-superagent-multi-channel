@@ -2,7 +2,7 @@
 
 > Language: [English](README.en-US.md) · [中文](README.md)
 
-**Status: `2.5.2` is published to npm and pushed (2026-11-17), and `latest` points at it; `2.5.1` is deprecated (its packument entry became visible before its tarball, so it could not be installed for several minutes after release).**
+**Status: `2.5.3` is published to npm and pushed (2026-11-17), and `latest` points at it; `2.5.2` is superseded by it, and `2.5.1` is deprecated (its packument entry became visible before its tarball, so it could not be installed for several minutes after release).**
 
 ## Completed
 
@@ -32,7 +32,9 @@
 - [x] Verified on the packed artifact: `setInterval(reconcile`, `notReporting`, `healthCode.polling` and
       `resolveSecretPath` are all present; after `npm install <tgz>`, `dsh-superagent-multi-channel/projex-watch` loads and
       exports `apply/inject/kind/name/supervise`, and the `supervise` disposer releases cleanly
-- [x] `npm publish` → `dsh-superagent-multi-channel@2.5.2`; `latest` points at 2.5.2
+- [x] `npm publish` → `dsh-superagent-multi-channel@2.5.3`; `latest` points at 2.5.3 (installs from the official registry; the
+      npmmirror mirror lags the registry, and for 2.5.1 it skipped the version entirely)
+- [x] `npm publish` → `dsh-superagent-multi-channel@2.5.2`; `latest` pointed at 2.5.2
       (for several minutes after `2.5.1` was published its packument entry was served while its tarball still 404'd, so
       `npm install …@2.5.1` failed with `ETARGET`; both settle later, but the npmmirror mirror skips the version outright.
       2.5.2 — the same content with the version bumped — was published instead and 2.5.1 deprecated in its favour; a real

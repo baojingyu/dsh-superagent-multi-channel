@@ -2,7 +2,7 @@
 
 > Language: [English](README.en-US.md) · [中文](README.md)
 
-**Status: docs reviewed and open-sourced (2026-11-14); npm publish is blocked by login state; the package has not yet been submitted for listing on any platform.**
+**Status: `2.5.1` is pushed (2026-11-17); npm publish is still blocked by this machine's npm login, and the 2.5.1 tarball is built and verified.**
 
 ## Completed
 
@@ -20,6 +20,19 @@
       endpoint: https://baojingyu.github.io/dsh-superagent-multi-channel/distribution/catalog/v1/plugins
       (manifest measured `application/json`; endpoint measured `application/octet-stream`; if the Host strictly checks content-type, host on
       Cloudflare/Vercel or use path B)
+
+## 2.5.1 release preparation (2026-11-17)
+
+- [x] `main` pushed: `7873e8c` (`fix(projex): poll an instance enabled after load, and say why a Source is not reporting`)
+- [x] `pnpm typecheck` → 0; `pnpm test` → 1,674 passed / 27 skipped; `pnpm build` → complete
+      (two suites fail on macOS only and are unrelated to the plugin's logic: `tests/source-actions.spec.ts` needs a
+      Windows `.cmd` launcher, and `tests/weixin-bridge-contract.spec.ts`'s iLink mock times out in `beforeAll`; both fail
+      the same way on 2.5.0)
+- [x] `npm pack` produced `dsh-superagent-multi-channel-2.5.1.tgz` (83 files / 1.1 MB / 2.4 MB unpacked)
+- [x] Verified on the packed artifact: `setInterval(reconcile`, `notReporting`, `healthCode.polling` and
+      `resolveSecretPath` are all present; after `npm install <tgz>`, `dsh-superagent-multi-channel/projex-watch` loads and
+      exports `apply/inject/kind/name/supervise`, and the `supervise` disposer releases cleanly
+- [ ] `npm publish` — waiting on this machine's npm login (below)
 
 ## Blockers
 

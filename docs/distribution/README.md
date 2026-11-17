@@ -2,7 +2,7 @@
 
 > 语言：[中文](README.md) · [English](README.en-US.md)
 
-**状态：文档已 review 通过并开源（2026-11-14）；npm 发布被登录状态阻塞，尚未向任何平台提交收录。**
+**状态：`2.5.1` 已开源推送（2026-11-17）；npm 发布仍被本机 npm 登录状态阻塞，2.5.1 的 tarball 已产出并验证。**
 
 ## 已完成
 
@@ -20,6 +20,18 @@
       endpoint：https://baojingyu.github.io/dsh-superagent-multi-channel/distribution/catalog/v1/plugins
       （manifest 实测 `application/json`；endpoint 实测 `application/octet-stream`，若 Host 严格校验 content-type，改托管
       Cloudflare/Vercel 或走路径 B）
+
+## 2.5.1 发布准备（2026-11-17）
+
+- [x] `main` 已推送：`7873e8c`（`fix(projex): poll an instance enabled after load, and say why a Source is not reporting`）
+- [x] `pnpm typecheck` → 0；`pnpm test` → 1,674 passed / 27 skipped；`pnpm build` → Build complete
+      （2 个失败只在 macOS 出现且与插件逻辑无关：`tests/source-actions.spec.ts` 需 Windows `.cmd` 启动器，
+      `tests/weixin-bridge-contract.spec.ts` 的 iLink mock 在 `beforeAll` 超时；两者在 2.5.0 上以同样方式失败）
+- [x] `npm pack` 产出 `dsh-superagent-multi-channel-2.5.1.tgz`（83 文件 / 1.1 MB / 解包 2.4 MB）
+- [x] 包内容实机验证：`setInterval(reconcile`、`notReporting`、`healthCode.polling`、`resolveSecretPath` 均在产物中；
+      `npm install <tgz>` 后 `dsh-superagent-multi-channel/projex-watch` 可加载，导出 `apply/inject/kind/name/supervise`，
+      `supervise` 的 disposer 可正常回收
+- [ ] `npm publish`——**待本机 npm 登录**（见下）
 
 ## 阻塞项
 

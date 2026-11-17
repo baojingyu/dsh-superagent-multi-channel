@@ -833,17 +833,22 @@ describe('github source', () => {
   }
   it('takes in a new Issue from its notification as a Trigger with its body, addressed to the agent when the body mentions it', async () => {
     const h = host()
-    // A pull request reported at its Issue address, and an Issue the agent opened itself, add nothing.
+    // A pull request reported at its Issue address adds nothing here. An Issue under the agent account does arrive: the
+    // agent opens no Issues, so the operator sharing that account wrote it.
     const agents = { user: { login: 'agent-bot', type: 'User' } }
     notify(h, [issue(12, { body: '@agent-bot please fix the login' }), issue(13, { pull_request: { url: 'x' } }), issue(14, agents)])
     await pollRound(h)
-    expect(h.receive).toHaveBeenCalledOnce()
+    expect(h.receive).toHaveBeenCalledTimes(2)
     const id = key('github-issue', '12')
     const url = 'https://github.com/acme/widgets/issues/12'
-    expect(h.receive.mock.calls[0]![0]).toEqual({ id, source: 'github', threads: [{ source: 'github', id: '12' }],
-      actor: { source: 'github', id: 'alice' }, human: true, at: '2026-09-09T00:00:00Z',
-      text: 'Login fails\n\n@agent-bot please fix the login', addressed: 'mention', channel: githubChannel(12, url), url,
-      meta: { number: 12, isPr: false, kind: 'issue' } })
+    const sent = h.receive.mock.calls.map(([trigger]) => trigger)
+    expect(sent.find(trigger => trigger.meta.number === 12)).toEqual({ id, source: 'github',
+      threads: [{ source: 'github', id: '12' }], actor: { source: 'github', id: 'alice' }, human: true,
+      at: '2026-09-09T00:00:00Z', text: 'Login fails\n\n@agent-bot please fix the login', addressed: 'mention',
+      channel: githubChannel(12, url), url, meta: { number: 12, isPr: false, kind: 'issue' } })
+    // The Issue under the agent account is a person's request too, so the gate may judge it.
+    expect(sent.find(trigger => trigger.meta.number === 14)).toMatchObject({ id: key('github-issue', '14'),
+      actor: { source: 'github', id: 'agent-bot' }, human: true })
     // An allowed sender's mention is an explicit request on that poll.
     expect(h.engine.candidate(id)?.strength).toBe('explicit')
     expect(h.store.threads.get('github:12')!.meta).toMatchObject({ title: 'Login fails', label: '#12 Login fails' })
@@ -1231,9 +1236,11 @@ describe('observing the GitHub repository', () => {
       { ...issue(5, { created_at: at(3), updated_at: at(3) }), pull_request: { url: 'x' } },
       issue(6, { created_at: at(4), updated_at: at(4), user: { login: 'agent-bot', type: 'User' } })] })
     await pollRound(h)
-    // #3 was opened before the Source observed Issues, and #6 is the agent's own.
-    expect(h.receive.mock.calls.map(([trigger]) => [trigger.meta.number, trigger.meta.kind, trigger.id]))
-      .toEqual([[4, 'issue', issueTrigger(issue(4), 'agent-bot').id], [5, 'pull', issueTrigger(issue(5), 'agent-bot').id]])
+    // #3 was opened before the Source observed Issues. #6 is under the agent account: the agent opens no Issues, so the
+    // operator sharing that account wrote it and it is a person's request, unlike a PR under the same account.
+    expect(h.receive.mock.calls.map(([trigger]) => [trigger.meta.number, trigger.meta.kind, trigger.human, trigger.id]))
+      .toEqual([[4, 'issue', true, issueTrigger(issue(4), 'agent-bot').id], [5, 'pull', true, issueTrigger(issue(5), 'agent-bot').id],
+        [6, 'issue', true, issueTrigger(issue(6), 'agent-bot').id]])
     const started = { issues: at(0), pulls: at(0) }
     expect(h.store.get('github-stream:issues')).toEqual({ since: cursorAt(at(4)), started })
     const list = () => calls.filter(args => args[1]!.startsWith('repos/acme/widgets/issues?'))
@@ -1249,6 +1256,28 @@ describe('observing the GitHub repository', () => {
     observe(h, {})
     await pollRound(h)
     expect(h.store.get('github-stream:issues')).toBeUndefined()
+    h.store.close()
+  })
+  it('takes in an Issue the operator opened with the agent CLI\'s own account, and still not a PR under it', async () => {
+    const h = host()
+    // The operator signs the agent CLI in with their own account, so the Issue's author is the agent login. GitHub does
+    // not notify an account of its own actions, so the notification list stays empty and only the Issue stream sees it.
+    const own = { user: { login: 'agent-bot', type: 'User' } }
+    // The operator's own account is on the Source's allowed list, as it is in their settings.
+    const now = h.store.settings()
+    h.store.saveSettings({ ...now, policy: { ...now.policy, sources: { ...now.policy.sources,
+      github: { ...now.policy.sources.github!, allowed: [{ id: 'agent-bot' }] } } } })
+    observe(h, { observeIssues: true, observePulls: true })
+    h.store.set('github-since', at(-24))
+    h.store.set('github-stream:issues', { since: at(0), started: { issues: at(0), pulls: at(0) } })
+    repository(h, { issues: [issue(21, { ...own, created_at: at(1), updated_at: at(1) }),
+      { ...issue(22, { ...own, created_at: at(2), updated_at: at(2) }), pull_request: { url: 'x' } }] })
+    await pollRound(h)
+    expect(h.receive.mock.calls.map(([trigger]) => [trigger.meta.number, trigger.meta.kind, trigger.human]))
+      .toEqual([[21, 'issue', true]])
+    // A person's own Issue reaches the gate as a person's message, so the admission table can admit it as a candidate;
+    // its body names no mention, so that candidate is inferred rather than explicit.
+    expect(h.engine.candidate(key('github-issue', '21'))).toMatchObject({ strength: 'inferred' })
     h.store.close()
   })
   it('takes in the repository\'s conversation and review comments, on the Issue or PR each is on', async () => {

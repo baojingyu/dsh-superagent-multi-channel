@@ -3,6 +3,15 @@
 Versions follow semantic versioning; each release is published to the plugin market under the package name
 `dsh-superagent-multi-channel`, so a user upgrades by installing the new version.
 
+## 2.5.3
+
+An Issue reaches the agent even when the agent CLI is signed in with the operator's own GitHub account.
+
+GitHub never notifies an account of its own actions, and the Issue stream additionally dropped every item authored by the
+agent login, so an operator who shares one account with the agent saw no Issues at all. The stream now skips only PRs and
+comments under the agent account — its own output — and treats an Issue under it as the operator's request, which the
+Policy's allowed list and admission table then judge like any other.
+
 ## 2.5.2
 
 Identical to 2.5.1 in content. 2.5.1 is deprecated in its favour: right after it was published, the registry served its

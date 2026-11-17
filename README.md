@@ -5,7 +5,7 @@
 **A DSH plugin that wires Feishu, GitHub, WeChat, WeCom, DingTalk and Alibaba Cloud Yunxiao Projex into one
 assess → ticket → execute → reply loop.**
 
-Version `2.5.2` · 109 test files / 1,674 passing · MIT · installs beside the official `dsh-superagent`
+Version `2.5.3` · 109 test files / 1,675 passing · MIT · installs beside the official `dsh-superagent`
 
 > An extension of the official open-source superagent: the two official sources (Feishu, GitHub) stay as they are, and
 > WeChat, WeCom, DingTalk and Yunxiao Projex are **added** and aligned to the same capability surface (reception scope,

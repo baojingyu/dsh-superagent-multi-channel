@@ -4,10 +4,10 @@
  * rather than the file's permissions, so the same assertion runs on every machine.
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { homedir, tmpdir } from 'node:os'
+import { join, isAbsolute } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { readSecretFile, requireOwnerOnly } from '../src/infra/secret-file.ts'
+import { readSecretFile, requireOwnerOnly, resolveSecretPath } from '../src/infra/secret-file.ts'
 import { withPlatform } from './fixtures/platform.ts'
 
 /** The platform this worker started with, so a stub that leaks is caught instead of being reported as a later failure. */
@@ -97,5 +97,43 @@ describe('readSecretFile', () => {
       expect(() => readSecretFile(tokenFile, 'hosting token file')).toThrow(/The hosting token file must have mode 0600, not \d{3}/)
     })
     expect(process.platform).toBe(ORIGINAL)
+  })
+})
+
+describe('resolveSecretPath', () => {
+  /** Run `body` with the home directory this machine reports pointed at `home`, which is what `~` expands to. */
+  const withHome = (home: string, body: () => void): void => {
+    const before = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE }
+    process.env.HOME = home
+    process.env.USERPROFILE = home
+    try { body() } finally {
+      if (before.HOME === undefined) delete process.env.HOME; else process.env.HOME = before.HOME
+      if (before.USERPROFILE === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = before.USERPROFILE
+    }
+  }
+  it('expands a leading ~ to this account\'s home directory, which is how a settings field writes a path', () => {
+    expect(resolveSecretPath('~/.projex-token.txt')).toBe(join(homedir(), '.projex-token.txt'))
+    expect(resolveSecretPath('~')).toBe(homedir())
+    expect(isAbsolute(resolveSecretPath('~/.projex-token.txt'))).toBe(true)
+  })
+  it('leaves an absolute path exactly as the operator wrote it', () => {
+    expect(resolveSecretPath('/srv/secrets/token')).toBe('/srv/secrets/token')
+  })
+  it('refuses a relative path, because it would be read from the host process\'s working directory', () => {
+    // The path that caused this rule: a literal `~` directory was created inside the profile directory the host started in.
+    expect(() => resolveSecretPath('token')).toThrow(/must be an absolute path or start with ~\//)
+    expect(() => resolveSecretPath('./secrets/token')).toThrow(/read from the host process's working directory/)
+  })
+  it('reads and names the file a ~ path resolves to, so writer and reader agree on one file', () => {
+    const home = join(directory, 'home')
+    mkdirSync(home)
+    writeFileSync(join(home, 'token'), 'secret\n', { mode: 0o600 })
+    withHome(home, () => {
+      expect(resolveSecretPath('~/token')).toBe(join(home, 'token'))
+      // The file is owner-only, so the same read succeeds on every platform.
+      expect(readSecretFile('~/token', 'bridge token file')).toBe('secret')
+      // A message names the resolved file, which is the one to create when the configured name is not there.
+      expect(() => readSecretFile('~/absent', 'bridge token file')).toThrow(join(home, 'absent'))
+    })
   })
 })

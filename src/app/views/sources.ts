@@ -1,7 +1,7 @@
 /** Source status view: health, 24-hour trigger counts, and recently filtered or dropped messages per Source instance. */
 import { threadKey } from '../../core/index.ts'
 import type { Deployment } from '../../deployment.ts'
-import { healthEntry, type Health } from '../../sources/host.ts'
+import { NOT_REPORTING, healthEntry, type Health } from '../../sources/host.ts'
 import type { SourceInstance } from '../../sources/kind.ts'
 import type { SourceRegistry } from '../../sources/registry.ts'
 import type { SetupProblem } from '../../setup.ts'
@@ -15,13 +15,16 @@ export type HealthMap = Record<string, Health>
  */
 const entryOf = (instance: Pick<SourceInstance, 'id' | 'kind'>, name: string): string =>
   instance.id === instance.kind ? name : healthEntry(instance.id, name)
-/** Resolves health entries for a Source instance, treating stale `sourceOff` entries on an enabled Source as `starting`. */
+/**
+ * Resolves health entries for a Source instance. An entry that is missing altogether, or that still says `sourceOff` on
+ * an enabled Source, resolves to the same `notReporting` placeholder a claimed-but-unreported entry holds, so the panel
+ * words the row instead of showing an empty detail.
+ */
 export function sourceHealth(sources: SourceRegistry, instance: SourceInstance, health: HealthMap) {
   const kind = sources.kind(instance.kind)
-  const starting: Health = { state: 'starting', detail: '' }
   const parts = (kind?.health ?? []).map(name => {
     const entry = health[entryOf(instance, name)]
-    return { name, ...(!entry || (instance.enabled && entry.code === 'sourceOff') ? starting : entry) }
+    return { name, ...(!entry || (instance.enabled && entry.code === 'sourceOff') ? NOT_REPORTING : entry) }
   })
   return { id: instance.id, title: kind?.title ?? { zh: instance.id, en: instance.id }, health: parts }
 }

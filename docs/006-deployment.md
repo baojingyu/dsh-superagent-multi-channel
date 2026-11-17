@@ -121,6 +121,12 @@ To move an installation of an older version of this bundle: disable the old bund
 empty - the default adopts the existing `~/.dsh/state/superagent`, so the database, tickets and cursors come along. If both
 stay installed, each needs its **own** `stateDir` (one directory admits one instance, and the lock says so).
 
+A `cordis.patch.yml` written for an older version names the **old** entry ids, and a patch that matches no entry applies
+nothing: DSH logs `patch: entry "dsh-superagent" not found` for each one, and a `stateDir` line in it stops applying
+silently. The plugin then adopts its default directory, so its Sources, tickets and cursors are the ones in *that* directory
+rather than the ones the installation has been running with. Check the ids in the profile patch against the table above
+after every upgrade, and look for those `patch: entry … not found` lines in the DSH log.
+
 ## Install from a plugin market or a tarball
 
 - Plugin manager or market: install `dsh-superagent-multi-channel@<version>`. The market reads `dsh.bundle.patch` and the

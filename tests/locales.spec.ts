@@ -3,6 +3,7 @@ import type { EffectKind } from '../src/app/effects.ts'
 import { en, zh, type DshSuperagentKey } from '../src/client/locales.ts'
 import { reasonLabel, type T } from '../src/client/text.ts'
 import { REASONS, USER_ERRORS } from '../src/core/index.ts'
+import { HEALTH_TEXT } from '../src/sources/host.ts'
 
 const placeholders = (text: string) => [...text.matchAll(/\{(\w+)\}/g)].map(match => match[1]).sort()
 
@@ -30,6 +31,12 @@ it('names every health entry of dsh-superagent itself, which the overview shows 
   const entries = { runtime: 0, models: 0, reply: 0, worker: 0, assessment: 0, launch: 0, delivery: 0, relay: 0,
     notice: 0, evals: 0 } satisfies Record<EffectKind | 'runtime' | 'models' | 'reply' | 'worker' | 'evals', 0>
   expect(Object.keys(entries).filter(name => !(`health.${name}` in zh))).toEqual([])
+})
+
+it('words every health code a Source reports, in both languages, because the panel shows the words and not the detail', () => {
+  // A Source health entry is worded by its `code` when it has one (`src/client/text.ts`), so a code without words would
+  // reach a person as a raw key.
+  expect(Object.keys(HEALTH_TEXT).filter(code => !(`healthCode.${code}` in zh) || !(`healthCode.${code}` in en))).toEqual([])
 })
 
 it('words every refusal the host words by code, in both languages', () => {

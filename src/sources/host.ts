@@ -11,6 +11,11 @@ import { fill } from '../infra/text.ts'
 export const HEALTH_TEXT = {
   setupPending: 'Waiting for the deployment check',
   sourceOff: 'Off',
+  // The placeholder a registered Source's entry holds until something reports for it, and what an entry still saying `sourceOff`
+  // on an enabled Source means: no report has arrived, which is worth saying because a Source nothing polls looks the same as
+  // one that is starting up.
+  notReporting: 'Waiting for this Source to report: it may not be configured, or nothing may be polling it',
+  polling: 'Reading {category} ({index}/{total}); {received} work items so far',
   feishuCliUnset: 'The Source is on, and its bot lark-cli is not set',
   feishuBotMissing: 'Waiting for the Feishu bot',
   pollFailures: '{count} consecutive failed polls; last: {error}',
@@ -20,6 +25,13 @@ export type Health = { state: 'starting' | 'ready' | 'paused' | 'error'; detail:
 export function health(state: Health['state'], code: HealthCode, values: Record<string, string> = {}): Health {
   return { state, detail: fill(HEALTH_TEXT[code], values), code, ...Object.keys(values).length ? { values } : {} }
 }
+/**
+ * What a Source's declared entry holds until something reports for it: `starting` worded as "waiting for this Source to
+ * report", which is the honest reading of a row whose watcher never started, and of one switched on seconds ago. The
+ * registry claims its entries with it, and the panel substitutes it where a report is missing altogether. `HealthBoard`
+ * replaces an entry on every report and never writes into a value, so the one instance is shared safely.
+ */
+export const NOT_REPORTING: Health = health('starting', 'notReporting')
 /** Board entry of one health entry a Source instance reports: its instance ID prefixes the entry name its kind declares. */
 export const healthEntry = (instance: string, name: string): string => `${instance}:${name}`
 export interface SourceHost {

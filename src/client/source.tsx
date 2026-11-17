@@ -131,9 +131,11 @@ function SourceRow({ source }: { source: SourceStatusRow }) {
   const { problem, dropped } = source
   const { dot, label: state } = sourceMark(t, source.state)
   const { received, filtered, lastAt } = source.stats
-  // Omit healthy parts and suppress per-part notes when a setup problem already explains why the Source is stopped.
+  // Omit healthy parts and suppress per-part notes when a setup problem already explains why the Source is stopped. A part
+  // still `starting` is kept: that is the row that says why a Source that looks stuck has not reported yet, and dropping it
+  // is what made a Source nothing polled indistinguishable from one that had just been switched on.
   const notes = source.enabled && !problem && !setup?.problem ? source.health.filter(item => item.state === 'error'
-    || item.state === 'paused') : []
+    || item.state === 'paused' || item.state === 'starting') : []
   return <li className="dt-row">
     <Dot state={dot} label={state} />
     <div className="dt-row-main">

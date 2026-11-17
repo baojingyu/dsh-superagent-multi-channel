@@ -6,7 +6,7 @@ import { YunxiaoHttpError } from '../src/infra/yunxiao-api.ts'
 import { KV, type Key } from '../src/kv.ts'
 import type { SourceContext } from '../src/sources/host.ts'
 import type { WorkAdapter, WorkItem, WorkNote } from '../src/sources/work/port.ts'
-import { pollWorkItems } from '../src/sources/work/stream.ts'
+import { pollWorkItems, type WorkProgress } from '../src/sources/work/stream.ts'
 import { testDeployment } from './fixtures/deployment.ts'
 
 const commands = (): Commands => new Commands(() => testDeployment(), {}, new AbortController().signal)
@@ -267,5 +267,19 @@ describe('pollWorkItems comment triggers', () => {
       { instance: 'projex', project: 'proj-1', categories: ['bug'] })
     expect(reads).toEqual([])
     expect(fake.received).toEqual([])
+  })
+
+  it('reports each category before reading it, so a long first round is visible as work in progress', async () => {
+    // A first round reads from the epoch and can archive hundreds of images; without this a Source that is working reads as
+    // one that never started.
+    const { adapter } = fakeAdapter(categories => categories.includes('bug') ? [item({ key: 'AB-1' })] : [])
+    const { ctx } = fakeContext({ projex: { project: 'proj-1' } })
+    const seen: WorkProgress[] = []
+    await pollWorkItems(ctx, adapter, { instance: 'projex', project: 'proj-1', categories: ['requirement', 'bug'],
+      progress: event => { seen.push(event) } })
+    expect(seen).toEqual([
+      { category: 'requirement', index: 1, total: 2, received: 0 },
+      { category: 'bug', index: 2, total: 2, received: 0 },
+    ])
   })
 })

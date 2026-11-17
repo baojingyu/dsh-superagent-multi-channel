@@ -21,6 +21,7 @@ import { SettingsSchema, policyVersion, type SettingsOrigin } from '../src/polic
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { feishuKind } from '../src/sources/feishu.ts'
 import { githubKind, pollRound } from '../src/sources/github.ts'
+import { NOT_REPORTING } from '../src/sources/host.ts'
 import { CliError, Commands } from '../src/infra/commands.ts'
 import { UserError, key, runningAssignment, said, threadKey, waitsForPerson, type Trigger } from '../src/core/index.ts'
 import { feishuTrigger } from '../src/sources/feishu.ts'
@@ -605,7 +606,7 @@ it('reports a Source that was switched on as starting until its next pass report
   await save(false)
   runtime.context(githubKind).report('github', { state: 'paused', detail: 'Off', code: 'sourceOff' })
   await save(true)
-  expect(await github()).toEqual([{ name: 'github', state: 'starting', detail: '' }])
+  expect(await github()).toEqual([{ name: 'github', ...NOT_REPORTING }])
   // A part that reports something else, such as a missing CLI, keeps its report: no pass may come to replace it.
   await save(false)
   runtime.context(githubKind).report('github', { state: 'paused', detail: 'x', code: 'feishuCliUnset' })
@@ -1133,7 +1134,7 @@ it('runs a GitHub-only deployment: the GitHub part of the Policy decides alone, 
   expect(next.health).not.toHaveProperty('sync:feishu')
   const problems = () => overviewOf(next).problems
   const unregister = next.sources.register(githubKind)
-  expect(next.health.github).toEqual({ state: 'starting', detail: '' })
+  expect(next.health.github).toEqual(NOT_REPORTING)
   const policy = next.store.settings().policy
   await next.settings.save('policy', { ...policy, sources: {} }, next.store.blockRevision('policy'), 'panel')
   expect(problems()).toContainEqual({ kind: 'no-allowed' })

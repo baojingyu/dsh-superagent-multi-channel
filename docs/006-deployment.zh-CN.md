@@ -115,6 +115,8 @@ dsh plugin --profile superagent add "link:$PWD"
 
 要迁移本 bundle 旧版本的安装：禁用旧 bundle，启用本 bundle，并将 `stateDir` 留空——默认值会沿用现有的 `~/.dsh/state/superagent`，因此数据库、工单和游标一并带过来。如果两者都保持安装，则各自需要**自己的** `stateDir`（一个目录只容许一个实例，锁也会这样说明）。
 
+为旧版本写的 `cordis.patch.yml` 里是**旧**入口 id，而匹配不到任何条目的 patch 什么都不会应用：DSH 会为每个这样的条目记录 `patch: entry "dsh-superagent" not found`，其中的 `stateDir` 一行也随之静默失效。插件于是改用默认目录，来源、工单和游标都变成**那个**目录里的，而不是这套安装一直在用的那些。每次升级后请对照上表核对 profile patch 里的 id，并在 DSH 日志里查找这些 `patch: entry … not found` 行。
+
 ## 从插件市场或 tarball 安装
 
 - 插件管理器或市场：安装 `dsh-superagent-multi-channel@<version>`。市场从包中读取 `dsh.bundle.patch` 和展示元数据（`locale/en.json`、`locale/zh.json`、`icon.svg`），因此条目会以自己的标题、描述和图标出现。

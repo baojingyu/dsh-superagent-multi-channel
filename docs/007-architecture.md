@@ -186,7 +186,7 @@ Each kind has a health entry under its name. It reports an error once one of its
 
 Sources extend the host through `SourceKind`, defined in `src/sources/kind.ts`. A kind declares its identity, title, description, configuration `schema` and `fields`, derived `facts`, and `health` entries. Optional behavior includes `scope`, a `channel` (`allowed`, `send`, `link`), `threadContext`, `find`, `policy`, `environment` and `refreshLabels`.
 
-`SourceRegistry` (`registry.ts`) owns registered kinds and stored instances, and implements the Engine's `SourceScope`. Registration claims health entries on `HealthBoard`; duplicate claims and reserved `sync:` names are refused. A SourceContext writes only through its registration's claimed entries, so reports after unregistration do nothing.
+`SourceRegistry` (`registry.ts`) owns registered kinds and stored instances, and implements the Engine's `SourceScope`. Registration claims health entries on `HealthBoard`; duplicate claims and reserved `sync:` names are refused. A claimed entry holds the `notReporting` placeholder (`src/sources/host.ts`) until something reports for it, so a Source nothing polls is worded as one waiting for its first report rather than as one that is starting up. A SourceContext writes only through its registration's claimed entries, so reports after unregistration do nothing.
 
 Registry configuration methods include `kind`, `instances`, `instance`, `validate`, `validatePolicy`, `policyPart`, `channelAllowed`, `declarations`, `environments`, `find` and `scope`. `find` asks each kind that supports search.
 
@@ -480,7 +480,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/timeline.spec.ts` | A Thread's pages and a Trigger's neighbours by time and then id, with every received Trigger's time in one form |
 | `tests/migration.spec.ts` | The schema 11 migration: every stored record in its current shape, and the refusal of older schemas |
 | `tests/store.spec.ts` | Repositories and their working sets, in SQLite as in memory, the kv area, with every key of `KV` spelled only in `src/kv.ts` and the migration, settings history and queries |
-| `tests/secret-file.spec.ts` | The secret-file rule on both platforms: a POSIX file refused with the mode it had, a missing or empty one always refused, and Windows accepting what it cannot express |
+| `tests/secret-file.spec.ts` | The secret-file rule on both platforms: a POSIX file refused with the mode it had, a missing or empty one always refused, Windows accepting what it cannot express, and the path resolution that expands `~` and refuses a relative path |
 | `tests/prompts.spec.ts` | Prompt validation, assembly and versions |
 | `tests/cards.spec.ts` | The rules the built-in text must state, file by file |
 | `tests/model-surface.spec.ts` | Everything models read: tools, prompts, skills and inputs, checked against the tool schemas, the execution environment and the glossary, within a size budget per role |
@@ -498,6 +498,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/hosting-port.spec.ts` | `hostingKind`'s schema, `scope` and channel capabilities over a stub `HostAdapter` |
 | `tests/chat-dedupe.spec.ts` | `DeliveredRing`'s bounded deduplication, and the `chatKind` built on a stub `InboundTransport` |
 | `tests/work-port.spec.ts` | `workKind`'s category-to-row mapping and its outbound replies over a stub `WorkAdapter` |
+| `tests/projex-watch.spec.ts` | The Projex polling effect: one loop per enabled instance, re-read from the settings so a Source enabled, added or switched off while the plugin stays loaded is picked up |
 | `tests/work-context.spec.ts` | The work thread context: the description as root, the comments as the thread across pages, the item read once per conversation, a failed read retried, the agent's own comment marked `bot`, and an archived image served back |
 | `tests/work-environment.spec.ts` | The shared work environment: variable names per host, item values from the Trigger's channel address or its meta, empty values for a ticket that started elsewhere, and the host's own additions |
 | `tests/work-feedback.spec.ts` | `reflectWorkTickets`: the start status once, the done status after the ending, the already-current status skipped but recorded, a failed write retried, a forgotten ticket dropped, and the read-only host left alone |
@@ -533,7 +534,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/hosting-stream.spec.ts` | `pollHosting` on a real Store and a stub adapter: the cursor, the changed change requests and CI, the overflow and a failed change |
 | `tests/notice-channel.spec.ts` | The refusal notice reaches a conversation and nothing else: a work item's channel refuses it at the registry, a chat's accepts it, a channel that never opted in refuses it, and `acceptsNotice` answers before a row is queued |
 | `tests/work-self-write.spec.ts` | The ledger and the adapter around it: one revision per key, bounded, and a poll that drops its own write while keeping a person's later edit |
-| `tests/work-stream.spec.ts` | `pollWorkItems` on a real Store and a stub adapter: the initialized cursor, the three categories, idempotency, aborts and a failed category, and the comment rounds - a person's comment handed over in its item's admission row, the agent's and a bot's skipped, and a thread whose ticket is not open read not at all |
+| `tests/work-stream.spec.ts` | `pollWorkItems` on a real Store and a stub adapter: the initialized cursor, the three categories, idempotency, aborts and a failed category, the progress it reports per category, and the comment rounds - a person's comment handed over in its item's admission row, the agent's and a bot's skipped, and a thread whose ticket is not open read not at all |
 | `tests/work-images.spec.ts` | Work-item images: `<img fileIdentifier>` parsing (HTML and jsonML), sha256 de-duplication, type/size limits, failure degradation, and reading an archived image back as an attachment |
 | `tests/panel-instances.spec.ts` | The panel's data layer for several instances of one kind: the rows and health of two chat instances, deleting one, and a legacy Source without `kind` |
 | `tests/live/weixin-bridge.live.spec.ts` | The Weixin bridge against a real local sidecar (only with `LIVE=1`): health, status, rooms, members, messages, idempotent sends, and the token and permission failures |

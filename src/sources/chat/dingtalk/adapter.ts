@@ -1,6 +1,6 @@
 /** DingTalk adapter: parses robot stream callbacks into ChatEvents and sends replies through the message's sessionWebhook or the oapi robot API. */
 import { readFileSync, statSync } from 'node:fs'
-import { requireOwnerOnly } from '../../../infra/secret-file.ts'
+import { requireOwnerOnly, resolveSecretPath } from '../../../infra/secret-file.ts'
 import type { ChatEvent } from '../port.ts'
 
 /** What the DingTalk adapter needs: the app credentials, its robot code, and whether only `@` messages are received. */
@@ -33,11 +33,12 @@ export type DingTalkSendResult = 'sent' | 'gone'
  */
 function readSecret(filePath: string | undefined, inline: string): string {
   if (!filePath) return inline
+  const path = resolveSecretPath(filePath)
   let info
-  try { info = statSync(filePath) } catch { return inline }
+  try { info = statSync(path) } catch { return inline }
   if (!info.isFile()) throw new Error('The secret file is not a regular file')
-  requireOwnerOnly(info.mode, filePath, 'The secret file')
-  const value = readFileSync(filePath, 'utf8').trim()
+  requireOwnerOnly(info.mode, path, 'The secret file')
+  const value = readFileSync(path, 'utf8').trim()
   if (!value) throw new Error('The secret file is empty')
   return value
 }

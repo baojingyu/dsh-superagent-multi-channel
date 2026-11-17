@@ -4,7 +4,7 @@
 
 **把飞书、GitHub、微信、企业微信、钉钉、阿里云云效 Projex 接成同一套「评估 → 工单 → 执行 → 回复」闭环的 DSH 插件。**
 
-版本 `2.5.0` · 测试 102 文件 / 1624 通过 · 许可 MIT · 与官方 `dsh-superagent` 并存安装
+版本 `2.5.1` · 测试 109 文件 / 1674 通过 · 许可 MIT · 与官方 `dsh-superagent` 并存安装
 
 > 本仓库是官方开源 superagent 的扩展：官方两种来源（飞书、GitHub）保留原样，**新增**微信个人号、企业微信、钉钉与云效 Projex，并把它们对齐到同一套能力面（接收范围、授权名单、会话上下文、worker 读原文、检索、名称刷新、回复与回写）。逐项对照见 [能力矩阵](docs/extensions/capability-matrix.md)。
 
@@ -198,14 +198,16 @@ pnpm test               # vitest run --maxWorkers=2
 pnpm build              # tsdown，8 个入口
 ```
 
-最近一次全量回归（2026-11-16，2.5.0）：
+最近一次全量回归（2026-11-17，2.5.1）：
 
 ```
 tsc --noEmit   → 0
-vitest         → 103 files passed / 5 skipped (108)
-                 1647 passed / 41 skipped (1688)   0 failed
+vitest         → 103 files passed / 2 failed（均为 macOS 上无法运行的外部夹具）
+                 1674 passed / 27 skipped (1702)
 tsdown         → Build complete
 ```
+
+两个失败都只在 macOS 上出现，与插件逻辑无关：`tests/source-actions.spec.ts` 要启动 Windows 的 `.cmd` 启动器（`spawn cmd.exe ENOENT`），`tests/weixin-bridge-contract.spec.ts` 的 iLink mock 服务在 `beforeAll` 里超时。两者在 `2.5.0` 上以同样方式失败。
 
 ## 许可
 

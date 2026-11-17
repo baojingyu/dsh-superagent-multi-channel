@@ -4,7 +4,7 @@
  * their own `fetchFn`, so no test reaches the network.
  */
 import { readFileSync, statSync } from 'node:fs'
-import { requireOwnerOnly } from '../../../infra/secret-file.ts'
+import { requireOwnerOnly, resolveSecretPath } from '../../../infra/secret-file.ts'
 import type { ChatEvent, ChatMedia } from '../port.ts'
 
 /** One callback message as this adapter reads it: the normalized event plus the WeCom fields the kind keeps. */
@@ -54,14 +54,15 @@ export interface WecomSender {
  */
 export function readSecret(filePath: string | undefined, inline: string): string {
   if (!filePath) return inline
+  const path = resolveSecretPath(filePath)
   let info
-  try { info = statSync(filePath) } catch {
+  try { info = statSync(path) } catch {
     // Not created yet: fall back to the inline value so a half-configured deployment still starts.
     return inline
   }
   if (!info.isFile()) throw new Error('The secret file is not a regular file')
-  requireOwnerOnly(info.mode, filePath, 'The secret file')
-  const value = readFileSync(filePath, 'utf8').trim()
+  requireOwnerOnly(info.mode, path, 'The secret file')
+  const value = readFileSync(path, 'utf8').trim()
   if (!value) throw new Error('The secret file is empty')
   return value
 }

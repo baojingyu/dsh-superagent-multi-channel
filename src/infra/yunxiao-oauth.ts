@@ -11,6 +11,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { spawn } from 'node:child_process'
+import { resolveSecretPath } from './secret-file.ts'
 
 /** The three endpoints the flow uses. `registrationEndpoint` is absent when the site does not offer dynamic registration. */
 export interface OAuthEndpoints { authorizationEndpoint: string; tokenEndpoint: string; registrationEndpoint?: string }
@@ -213,8 +214,11 @@ async function tokenRequest(tokenEndpoint: string, form: Record<string, string>,
     ...typeof body.token_type === 'string' ? { tokenType: body.token_type } : {} }
 }
 
-/** Where the refresh material lives: a sibling of the token file, never the token file itself. */
-export const storedPath = (tokenFile: string): string => `${tokenFile}.oauth.json`
+/**
+ * Where the refresh material lives: a sibling of the token file, never the token file itself. The token file is resolved
+ * first, so a `~/…` path in the settings names one file for the sign-in, the reader and this store.
+ */
+export const storedPath = (tokenFile: string): string => `${resolveSecretPath(tokenFile)}.oauth.json`
 
 /** Reads the stored refresh material, or nothing when the token came from a personal access token. */
 export function readStored(tokenFile: string): StoredOAuth | undefined {
@@ -230,17 +234,20 @@ export function readStored(tokenFile: string): StoredOAuth | undefined {
 
 /** Writes the access token (the file every reader uses) and, beside it, what a renewal needs; both owner-only. */
 export function writeStored(tokenFile: string, input: { tokens: OAuthTokens; stored: StoredOAuth }): void {
-  mkdirSync(dirname(tokenFile), { recursive: true })
-  writeFileSync(tokenFile, `${input.tokens.accessToken}\n`, { mode: 0o600 })
-  writeFileSync(storedPath(tokenFile), `${JSON.stringify({ ...input.stored,
+  const path = resolveSecretPath(tokenFile)
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, `${input.tokens.accessToken}\n`, { mode: 0o600 })
+  writeFileSync(storedPath(path), `${JSON.stringify({ ...input.stored,
     ...input.tokens.refreshToken ? { refreshToken: input.tokens.refreshToken } : {},
     ...input.tokens.expiresAt ? { expiresAt: input.tokens.expiresAt } : {} }, null, 2)}\n`, { mode: 0o600 })
   // `writeFileSync`'s mode is filtered by the umask; the owner-only rule is what the reader enforces, so set it exactly.
-  try { chmodSync(tokenFile, 0o600); chmodSync(storedPath(tokenFile), 0o600) } catch { /* Windows keeps its ACL instead. */ }
+  try { chmodSync(path, 0o600); chmodSync(storedPath(path), 0o600) } catch { /* Windows keeps its ACL instead. */ }
 }
 
-/** True when this token file came from the OAuth flow (and so can be renewed without a person). */
-export const canRenew = (tokenFile: string): boolean => existsSync(storedPath(tokenFile))
+/** True when this token file came from the OAuth flow (and so can be renewed without a person); a path a reader refuses has no store beside it. */
+export const canRenew = (tokenFile: string): boolean => {
+  try { return existsSync(storedPath(tokenFile)) } catch { return false }
+}
 
 /**
  * Renews the access token after a 401 and rewrites both files; false when there is nothing to renew with, so the caller

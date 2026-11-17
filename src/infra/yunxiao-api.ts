@@ -1,6 +1,6 @@
 /** Minimal Aliyun Yunxiao (Projex) OpenAPI client: token-file auth, organization whitelist, and path confinement. */
 import { readFileSync, statSync } from 'node:fs'
-import { requireOwnerOnly } from './secret-file.ts'
+import { resolveSecretPath, requireOwnerOnly } from './secret-file.ts'
 import { renewAccessToken } from './yunxiao-oauth.ts'
 
 /** Response of one Yunxiao OpenAPI call; `body` is the decoded JSON (or raw text when the payload is not JSON). */
@@ -128,20 +128,21 @@ export function createYunxiaoApi(options: YunxiaoApiOptions): YunxiaoApi {
  * otherwise); on Windows the owner-only bit test is skipped, because the synthesized mode carries no ACL information.
  */
 function readToken(file: string): string {
+  const path = resolveSecretPath(file)
   let mode: number
   try {
-    mode = statSync(file).mode
+    mode = statSync(path).mode
   } catch (error) {
-    throw new Error(`Yunxiao token file is not readable: ${file}: ${messageOf(error)}`)
+    throw new Error(`Yunxiao token file is not readable: ${path}: ${messageOf(error)}`)
   }
-  requireOwnerOnly(mode, file, 'Yunxiao token file')
+  requireOwnerOnly(mode, path, 'Yunxiao token file')
   let token: string
   try {
-    token = readFileSync(file, 'utf8').trim()
+    token = readFileSync(path, 'utf8').trim()
   } catch (error) {
-    throw new Error(`Yunxiao token file is not readable: ${file}: ${messageOf(error)}`)
+    throw new Error(`Yunxiao token file is not readable: ${path}: ${messageOf(error)}`)
   }
-  if (!token) throw new Error(`Yunxiao token file is empty: ${file}`)
+  if (!token) throw new Error(`Yunxiao token file is empty: ${path}`)
   return token
 }
 

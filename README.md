@@ -5,7 +5,7 @@
 **A DSH plugin that wires Feishu, GitHub, WeChat, WeCom, DingTalk and Alibaba Cloud Yunxiao Projex into one
 assess → ticket → execute → reply loop.**
 
-Version `2.5.0` · 103 test files / 1,647 passing · MIT · installs beside the official `dsh-superagent`
+Version `2.5.1` · 109 test files / 1,674 passing · MIT · installs beside the official `dsh-superagent`
 
 > An extension of the official open-source superagent: the two official sources (Feishu, GitHub) stay as they are, and
 > WeChat, WeCom, DingTalk and Yunxiao Projex are **added** and aligned to the same capability surface (reception scope,
@@ -209,8 +209,10 @@ pnpm test        # vitest run --maxWorkers=2
 pnpm build       # tsdown, eight entries
 ```
 
-Latest full regression (2026-11-16, 2.5.0): `tsc` 0; **103 files passed / 5 skipped, 1,647 passed / 41 skipped, 0 failed**;
-`tsdown` build complete.
+Latest full regression (2026-11-17, 2.5.1): `tsc` 0; **103 files passed, 1,674 passed / 27 skipped**; `tsdown` build complete.
+Two suites fail on macOS only and are unrelated to the plugin's logic: `tests/source-actions.spec.ts` spawns a
+Windows `.cmd` launcher (`spawn cmd.exe ENOENT`), and `tests/weixin-bridge-contract.spec.ts` starts the iLink mock
+server, whose `beforeAll` times out here. Both fail the same way on `2.5.0`.
 
 ## License
 

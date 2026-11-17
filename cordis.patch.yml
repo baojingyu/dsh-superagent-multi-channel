@@ -1,6 +1,7 @@
 # dsh-superagent bundle layer: inserts the plugins without configuration, and the agent presets its Sessions run under. The
-# profile supplies the `dsh-superagent` entry's stateDir (see docs/006-deployment.md and examples/profile.cordis.patch.yml); the plugin
-# refuses to start without stateDir.
+# profile sets the `dsh-superagent-multi-channel` entry's stateDir (see docs/006-deployment.md and
+# examples/profile.cordis.patch.yml); with no stateDir the plugin adopts an existing `~/.dsh/state/superagent`, else
+# `~/.dsh/state/dsh-superagent-multi-channel`, so a patch naming an entry id from an older version loses it silently.
 - insert:
     - id: dsh-superagent-multi-channel
       name: dsh-superagent-multi-channel

@@ -1,4 +1,4 @@
-/** Projex source plugin entry: registers the kind bound to the instance's adapter and polls its work items on a timer. */
+/** Projex source plugin entry: registers the kind bound to the instance's adapter, and one work-item polling loop per enabled instance. */
 import type { Context } from '@deepseek-ai/cordis'
 import { health, type SourceContext } from './host.ts'
 import { pause } from './poll.ts'
@@ -58,9 +58,23 @@ function contextOf(ctx: Context, instance: string): SourceContext {
   return ctx.orchestrator.context(kind as unknown as { kind: string; health: readonly string[] })
 }
 
-/** Polls one instance: quiet while it is off or not configured, and any failure becomes that instance's error health. */
-async function watch(source: SourceContext, instance: string, signal: AbortSignal): Promise<void> {
-  await source.ready
+/** How a loop ended: it was aborted (so it may start again), or it cannot work in this process at all. */
+type WatchOutcome = 'aborted' | 'fatal'
+
+/**
+ * Polls one instance: quiet while it is off or not configured, and any failure becomes that instance's error health.
+ *
+ * Returns `fatal` when the runtime itself never became ready. That promise settles once and stays rejected, so a loop that
+ * ended there would fail identically on every retry; the supervisor keeps such an instance out of the rotation instead of
+ * restarting it every reconcile tick, and reports the reason once.
+ */
+async function watch(source: SourceContext, instance: string, signal: AbortSignal): Promise<WatchOutcome> {
+  try {
+    await source.ready
+  } catch (error) {
+    if (!signal.aborted) source.report(HEALTH_ENTRY, { state: 'error', detail: String(error) })
+    return 'fatal'
+  }
   while (!signal.aborted) {
     const config = source.config<ProjexKindConfig>(instance)
     if (!config?.project) {
@@ -69,7 +83,16 @@ async function watch(source: SourceContext, instance: string, signal: AbortSigna
       try {
         const adapter = createProjexAdapter({ organization: config.organizationId, tokenFile: config.tokenFile, writeBack: config.writeBack })
         const result = await pollWorkItems(source, adapter,
-          { instance, project: config.project, categories: config.categories }, signal)
+          { instance, project: config.project, categories: config.categories,
+            // A first round of a real project reads from the epoch and archives every image, which is minutes of work. Reporting
+            // the category it is on keeps the Source reading as busy instead of as a start that never finishes. The state stays
+            // `ready`: `starting` is what the panel words as 启动中, so a per-category report in that state would make a Source
+            // that is working flash "starting" for the whole round, which is the very symptom this reporting exists to remove.
+            progress: event => {
+              if (!signal.aborted) source.report(HEALTH_ENTRY, health('ready', 'polling',
+                { category: event.category, index: String(event.index), total: String(event.total),
+                  received: String(event.received) }))
+            } }, signal)
         if (!signal.aborted) {
           source.report(HEALTH_ENTRY, result.errors.length
             ? { state: 'error', detail: result.errors.join('; ') }
@@ -82,19 +105,72 @@ async function watch(source: SourceContext, instance: string, signal: AbortSigna
     }
     await pause((source.config<ProjexKindConfig>(instance)?.pollSeconds ?? 60) * 1000, signal)
   }
+  // Only an abort ends the loop, and that is not a failure: the supervisor may start the instance again.
+  return 'aborted'
+}
+
+/** One running polling loop: the abort that stops it, and the loop's own end. */
+interface Loop { stop: () => void; done: Promise<void> }
+/**
+ * How long the polling effect waits between two reads of the settings, for instances that were enabled, added or removed
+ * while the plugin stayed loaded. It is not a poll interval: each loop keeps its own `pollSeconds`.
+ */
+const RECONCILE_MS = 5000
+
+/**
+ * Starts one loop per enabled instance and stops the loops whose instance went away, re-reading the settings on a timer
+ * rather than once when the plugin loads.
+ *
+ * `Settings.save` restarts the plugin only when a save changes a field setup reads (`setupChanged`: the GitHub
+ * repository and CLI, the Feishu bot CLI). A Source enabled, configured or added afterwards therefore keeps the plugin —
+ * and this effect — loaded, so a set read only at load would leave that Source without a loop for the rest of the
+ * plugin's life: its health entry would keep the `notReporting` placeholder `SourceRegistry.register` wrote when the kind
+ * was registered, and the panel would show "启动中" with nothing to explain it, for as long as the plugin ran. Re-reading
+ * the set costs one settings parse per interval, and a loop that is already running is left alone.
+ *
+ * A loop that ended `fatal` (the runtime never became ready) is not restarted: `source.ready` is settled for the life of
+ * the process, so every retry would fail the same way and overwrite the health detail with the same message on every tick.
+ * Such an instance is recorded in `dead` and left alone; it leaves that set when it is switched off and back on, so an
+ * operator who fixed the runtime by editing settings does get a fresh attempt.
+ */
+export function supervise(ctx: Context, intervalMs = RECONCILE_MS): () => Promise<void> {
+  const loops = new Map<string, Loop>()
+  /** Instances whose loop cannot run in this process; cleared when the instance is disabled. */
+  const dead = new Set<string>()
+  const start = (instance: string): void => {
+    const controller = new AbortController()
+    const source = contextOf(ctx, instance)
+    // A failure escaping the loop would terminate DSH, so it is reported as source health instead.
+    const done = watch(source, instance, controller.signal)
+      .catch((error: unknown): WatchOutcome => {
+        source.report(HEALTH_ENTRY, { state: 'error', detail: String(error) })
+        return 'fatal'
+      })
+      .then((outcome: WatchOutcome) => {
+        loops.delete(instance)
+        if (outcome === 'fatal') dead.add(instance)
+      })
+    loops.set(instance, { stop: () => controller.abort(), done })
+  }
+  const reconcile = (): void => {
+    const wanted = new Set(instancesOf(ctx))
+    // An instance that is no longer wanted is stopped and forgotten, so re-enabling it starts a fresh loop.
+    for (const instance of [...dead]) if (!wanted.has(instance)) dead.delete(instance)
+    for (const [instance, loop] of loops) if (!wanted.has(instance)) { loop.stop(); loops.delete(instance) }
+    for (const instance of wanted) if (!loops.has(instance) && !dead.has(instance)) start(instance)
+  }
+  reconcile()
+  const timer = setInterval(reconcile, intervalMs)
+  return async () => {
+    clearInterval(timer)
+    const running = [...loops.values()]
+    loops.clear()
+    for (const loop of running) loop.stop()
+    await Promise.all(running.map(loop => loop.done))
+  }
 }
 
 export function apply(ctx: Context): void {
   ctx.effect(() => ctx.orchestrator.sources.register(kindFor(configured(ctx.orchestrator.sources))), 'projex: source kind')
-  ctx.effect(() => {
-    const controller = new AbortController()
-    // One controlled loop per enabled instance; a fresh settings load restarts the plugin and this effect with it.
-    const running = Promise.all(instancesOf(ctx).map(instance => {
-      const source = contextOf(ctx, instance)
-      // A failure escaping the loop would terminate DSH, so it is reported as source health instead.
-      return watch(source, instance, controller.signal)
-        .catch((error: unknown) => { source.report(HEALTH_ENTRY, { state: 'error', detail: String(error) }) })
-    }))
-    return async () => { controller.abort(); await running }
-  }, 'projex: work polling')
+  ctx.effect(() => supervise(ctx), 'projex: work polling')
 }

@@ -142,6 +142,14 @@ it('states each Source by the first state that holds', () => {
   expect(states({ problem }, { feishu: { state: 'ready', detail: '' }, history: { state: 'ready', detail: '' }, github: { state: 'ready',
     detail: '' } }))
     .toEqual({ feishu: 'setup', github: 'setup' })
+  // A per-category progress report is a Source that is working, not one that is starting: it must stay 运行中 with its note,
+  // or a long first round would flash 启动中 for the whole round, which is the symptom the reporting exists to remove.
+  expect(states({}, { feishu: { state: 'ready', code: 'polling', detail: '' }, history: { state: 'ready', detail: '' },
+    github: { state: 'ready', detail: '' } }))
+    .toEqual({ feishu: 'ready', github: 'ready' })
+  // A part nothing has reported for is 启动中 with words, which is the state a Source no loop polls stays in.
+  expect(states({}, { feishu: { state: 'ready', detail: '' }, github: { state: 'ready', detail: '' } }))
+    .toEqual({ feishu: 'starting', github: 'ready' })
 })
 
 it('follows the Ticket\'s stage: a blocked Ticket a person answered since is working, with no retry, note or turn end', () => {

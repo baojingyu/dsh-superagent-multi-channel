@@ -3,7 +3,7 @@ import type { ChannelRef, OutboundMessage, ScopeResult, SourceScope, Trigger } f
 import type { Commands } from '../infra/commands.ts'
 import { HealthBoard, type HealthEntry } from '../infra/health.ts'
 import { AdmissionTableSchema, type Settings } from '../policy.ts'
-import { healthEntry } from './host.ts'
+import { NOT_REPORTING, healthEntry } from './host.ts'
 import { kindOf } from './instance.ts'
 import type { ChannelHost, ChannelLink, ChannelLinks, SourceInstance, SourceKind, TriggerContext, VariableSpec } from './kind.ts'
 
@@ -27,6 +27,8 @@ export class SourceRegistry implements SourceScope {
   /**
    * Registers a SourceKind, claims its health entries for its default instance on HealthBoard (rejecting `sync:` prefixes
    * owned by Settings), and returns an unregister disposer that releases them together with its other instances' entries.
+   * A claimed entry holds the `notReporting` placeholder until something reports for it, so a Source whose watcher never
+   * started says so instead of looking like one that is starting up.
    */
   register<C extends Record<string, unknown>>(kind: SourceKind<C>): () => void {
     if (this.kinds.has(kind.kind)) throw new Error(`Source kind already registered: ${kind.kind}`)
@@ -41,7 +43,7 @@ export class SourceRegistry implements SourceScope {
       this.instanceClaims.delete(kind.kind)
     }
     for (const name of kind.health) {
-      try { entries.set(name, this.board.claim(name, { state: 'starting', detail: '' })) }
+      try { entries.set(name, this.board.claim(name, NOT_REPORTING)) }
       catch { release(); throw refused(name) }
     }
     for (const [name, entry] of entries) this.health.set(name, entry)
@@ -65,7 +67,7 @@ export class SourceRegistry implements SourceScope {
     return new Map(names.flatMap(name => {
       let entry = claimed.get(name)
       if (!entry) {
-        try { entry = this.board.claim(healthEntry(instance, name), { state: 'starting', detail: '' }) }
+        try { entry = this.board.claim(healthEntry(instance, name), NOT_REPORTING) }
         catch { return [] }
         claimed.set(name, entry)
       }

@@ -7,6 +7,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { OutboundMessage } from '../src/core/index.ts'
 import { Commands } from '../src/infra/commands.ts'
 import { HealthBoard } from '../src/infra/health.ts'
+import { NOT_REPORTING } from '../src/sources/host.ts'
 import { sourceContextOf, type SourceContextDeps } from '../src/app/source-context.ts'
 import { feishuChannel, feishuTrigger, feishuTriggerId } from '../src/sources/feishu-trigger.ts'
 import { testDeployment } from './fixtures/deployment.ts'
@@ -94,7 +95,7 @@ describe('Source registry', () => {
     expect(board.all.github).toBeUndefined()
     sources.register(githubKind)
     first.report('github', { state: 'error', detail: 'late' })
-    expect(board.all.github).toEqual({ state: 'starting', detail: '' })
+    expect(board.all.github).toEqual(NOT_REPORTING)
     context(githubKind).report('github', { state: 'ready', detail: 'again' })
     expect(board.all.github).toEqual({ state: 'ready', detail: 'again' })
   })

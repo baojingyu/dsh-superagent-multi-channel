@@ -3,6 +3,38 @@
 Versions follow semantic versioning; each release is published to the plugin market under the package name
 `dsh-superagent-multi-channel`, so a user upgrades by installing the new version.
 
+## 2.5.1
+
+A Source switched on while the plugin stays loaded starts polling, a Source nothing polls says so, and a credential path
+means the file the operator wrote.
+
+- **The Projex Source gets its polling loop whenever it is enabled, not only when the plugin loads.** The polling effect
+  mapped the enabled instances once, and `Settings.save` restarts the plugin only when a save changes a field setup reads
+  (the GitHub repository and CLI, the Feishu bot CLI). A Projex Source enabled, configured or added afterwards therefore
+  never got a loop: no work item was read until the next restart or upgrade, and the panel showed "启动中" with nothing to
+  explain it. The effect now re-reads the settings, starting the loops of instances that appeared and stopping the ones
+  that went away, and leaves running loops alone.
+- **A health entry with no report says so.** The placeholder a claimed entry holds before anything reports for it — and the
+  `sourceOff` an enabled Source can still carry — is now worded ("waiting for this Source to report: it may not be
+  configured, or nothing may be polling it") instead of reaching a person as an empty line that reads like a Source
+  starting up forever.
+- **A round in progress is visible.** A first round reads the project from the epoch and archives every embedded image,
+  which on a real project is minutes of work: 1,152 work items and 719 images (192 MiB) here, about twelve minutes with
+  nothing on screen to show for it. The work stream now reports the category it is reading, and the Source row shows
+  "reading <category> (i/n), k work items so far" instead of an unqualified "启动中". A `starting` part also renders as a
+  note now; it used to be filtered out, which is why a Source nothing polled and a Source still starting looked identical.
+- **A credential file path no longer depends on the process's working directory.** A leading `~` is this account's home
+  directory and any other relative path is refused with a message naming the resolved file, for the Yunxiao token file and
+  its refresh store, the hosting token, the Weixin bridge token, and the DingTalk and WeCom secret files. A Yunxiao token
+  field holding `~/.projex-token.txt` had become a directory named `~` inside the directory the host was started from, so
+  the sign-in wrote a token the operator never found.
+- **A loop that cannot run stops instead of spinning.** `source.ready` is settled for the life of the process, so a loop
+  that ended on a rejected runtime would fail identically on every reconcile tick and rewrite the same error. Such a loop
+  now reports once and leaves the rotation until its instance is switched off and on again.
+- **Upgrades.** `docs/006-deployment.md` now says what a profile patch written for an older version costs: it names entry
+  ids that no longer exist, so it applies nothing, and a `stateDir` line in it stops applying silently. The bundle's
+  `cordis.patch.yml` header names the current entry id and the state directory the plugin adopts without one.
+
 ## 2.5.0
 
 The WeChat panel is smaller, the defaults fit each profile, and a chosen port no longer has to be free: pick

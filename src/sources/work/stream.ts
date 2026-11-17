@@ -20,6 +20,24 @@ export interface WorkStreamOptions {
   project?: string
   /** Categories to poll; defaults to the instance configuration's `categories`, then requirement/bug/task. */
   categories?: readonly string[]
+  /**
+   * Called as a round proceeds, so a caller can show that it is working. A first round reads the project from the epoch and
+   * may archive hundreds of images, which takes minutes on a real project; without this a caller has nothing to report and
+   * a person reads the Source as stuck. Absent in tests that do not care.
+   */
+  progress?: (event: WorkProgress) => void
+}
+
+/** Where a round has got to: the category being read, and how many Triggers it has handed over so far. */
+export interface WorkProgress {
+  /** Category being read right now. */
+  category: string
+  /** 1-based position of that category in this round. */
+  index: number
+  /** How many categories this round reads. */
+  total: number
+  /** Triggers handed to the engine so far this round. */
+  received: number
 }
 
 /** Outcome of one polling round. */
@@ -123,8 +141,11 @@ export async function pollWorkItems(ctx: SourceContext, adapter: WorkAdapter, op
   let received = 0
   const errors: string[] = []
   const observed: Record<string, string> = {}
-  for (const category of categories) {
+  for (const [index, category] of categories.entries()) {
     if (signal?.aborted) break
+    // A round of a real project takes minutes; saying which category it is reading is the difference between "working" and
+    // "stuck" for whoever watches the Source, so it is reported before the read rather than after it.
+    options.progress?.({ category, index: index + 1, total: categories.length, received })
     try {
       const result = await pollCategory(ctx, adapter, options.instance, project, since, category, signal)
       received += result.received

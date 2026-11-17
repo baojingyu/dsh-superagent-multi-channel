@@ -2,7 +2,7 @@
 
 > Language: [English](README.en-US.md) · [中文](README.md)
 
-**Status: `2.5.2` is published to npm and pushed (2026-11-17). `2.5.1` is deprecated: npm stored its metadata but not its tarball, so it cannot be installed.**
+**Status: `2.5.2` is published to npm and pushed (2026-11-17), and `latest` points at it; `2.5.1` is deprecated (its packument entry became visible before its tarball, so it could not be installed for several minutes after release).**
 
 ## Completed
 
@@ -33,9 +33,10 @@
       `resolveSecretPath` are all present; after `npm install <tgz>`, `dsh-superagent-multi-channel/projex-watch` loads and
       exports `apply/inject/kind/name/supervise`, and the `supervise` disposer releases cleanly
 - [x] `npm publish` → `dsh-superagent-multi-channel@2.5.2`; `latest` points at 2.5.2
-      (`2.5.1`'s first publish returned `202 Accepted` but stored only metadata, so its tarball URL 404s and installing it
-      fails with `ETARGET`; it was deprecated, and 2.5.2 — the same content with the version bumped — was published
-      cleanly and verified with a real `npm install`)
+      (for several minutes after `2.5.1` was published its packument entry was served while its tarball still 404'd, so
+      `npm install …@2.5.1` failed with `ETARGET`; both settle later, but the npmmirror mirror skips the version outright.
+      2.5.2 — the same content with the version bumped — was published instead and 2.5.1 deprecated in its favour; a real
+      `npm install dsh-superagent-multi-channel@2.5.2` succeeds against both the registry and the mirror)
 - [x] Clean install from npm and smoke test: `dsh-superagent-multi-channel/projex-watch` exports
       `apply/inject/kind/name/supervise`, the `supervise` disposer releases cleanly, and the artifact carries
       `setInterval(reconcile`, `notReporting`, `healthCode.polling`, `resolveSecretPath` and the `fatal` branch

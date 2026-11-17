@@ -2,7 +2,7 @@
 
 > 语言：[中文](README.md) · [English](README.en-US.md)
 
-**状态：`2.5.2` 已发布到 npm 并开源推送（2026-11-17）。`2.5.1` 已废弃（npm 只写入元数据、未存 tarball，装不上）。**
+**状态：`2.5.2` 已发布到 npm 并开源推送（2026-11-17），`latest` 指向它；`2.5.1` 已废弃（发布后 packument 先于 tarball 可见，短时间内装不上）。**
 
 ## 已完成
 
@@ -32,8 +32,9 @@
       `npm install <tgz>` 后 `dsh-superagent-multi-channel/projex-watch` 可加载，导出 `apply/inject/kind/name/supervise`，
       `supervise` 的 disposer 可正常回收
 - [x] `npm publish` → `dsh-superagent-multi-channel@2.5.2`，`latest` 已指向 2.5.2
-      （`2.5.1` 首次发布时 npm 返回 `202 Accepted` 却只落元数据、没存 tarball，tarball URL 404、安装报 `ETARGET`；
-      已 `npm deprecate` 并改发同一内容、版本号 +1 的 2.5.2，实测 `npm install dsh-superagent-multi-channel@2.5.2` 成功）
+      （`2.5.1` 发布后数分钟内 packument 已可见但 tarball 仍 404，`npm install …@2.5.1` 报 `ETARGET`；两者后来都会收敛，
+      但 npmmirror 镜像直接跳过了该版本。故发同一内容、版本号 +1 的 2.5.2，并把 2.5.1 标记 deprecated 指向它。
+      实测 `npm install dsh-superagent-multi-channel@2.5.2` 在官方 registry 与默认镜像均成功）
 - [x] 从 npm 干净安装并冒烟：`dsh-superagent-multi-channel/projex-watch` 导出 `apply/inject/kind/name/supervise`，
       `supervise` disposer 正常回收；产物含 `setInterval(reconcile`、`notReporting`、`healthCode.polling`、
       `resolveSecretPath` 与 `fatal` 分支

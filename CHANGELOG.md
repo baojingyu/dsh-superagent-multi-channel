@@ -5,9 +5,10 @@ Versions follow semantic versioning; each release is published to the plugin mar
 
 ## 2.5.2
 
-Identical to 2.5.1 in content. 2.5.1 is deprecated: npm accepted its metadata but never stored its tarball, so
-`npm install dsh-superagent-multi-channel@2.5.1` fails with `ETARGET` and the tarball URL returns 404. 2.5.2 is the same
-build with the version bumped, published cleanly; install that.
+Identical to 2.5.1 in content. 2.5.1 is deprecated in its favour: right after it was published, the registry served its
+packument entry before its tarball, so `npm install dsh-superagent-multi-channel@2.5.1` failed with `ETARGET` and the
+tarball URL returned 404 for several minutes (both settle later; the npmmirror mirror skips the version entirely). 2.5.2 is
+the same build with the version bumped, published and confirmed installable from both the registry and the mirror.
 
 ## 2.5.1
 

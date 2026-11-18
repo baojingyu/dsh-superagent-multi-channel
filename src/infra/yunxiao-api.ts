@@ -46,13 +46,17 @@ export class YunxiaoHttpError extends Error {
 }
 
 /**
- * True when Yunxiao says the work item no longer exists - it is in the recycle bin. Projex answers a deleted item with
- * HTTP 400 and `errorCode: InvaildData.Failed` (Yunxiao's own spelling) rather than 404, so a status or comment call on a
- * deleted item is a vanished resource, not a failure to retry or report.
+ * True when Yunxiao says the work item no longer exists - it is in the recycle bin.
+ *
+ * A deleted item answers HTTP 404 `InvalidWorkitem.NotFound`, and a call that reaches the recycle-bin guard answers 400
+ * with `回收站`/`recycle bin`. Neither can be recognised by status alone: `InvaildData.Failed` is also the code Projex uses
+ * for a *rejected status transition* (`当前状态:处理中不能流转到目标状态:已完成`), so matching it marked a live work item as
+ * deleted, which stopped its Thread from ever being read again (ESFX-6305, ESFX-6306). Only a vanished-resource answer counts.
  */
 export function isWorkItemGone(error: unknown): boolean {
-  return error instanceof YunxiaoHttpError && error.status === 400
-    && /回收站|recycle ?bin|InvaildData\.Failed/i.test(error.message)
+  if (!(error instanceof YunxiaoHttpError)) return false
+  if (error.status === 404) return true
+  return /回收站|recycle ?bin|InvalidWorkitem\.NotFound/i.test(error.message)
 }
 
 const DEFAULT_BASE_URL = 'https://openapi-rdc.aliyuncs.com'

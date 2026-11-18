@@ -30,7 +30,7 @@ interface Fake {
   patched: { key: string; meta: Record<string, unknown> }[]
 }
 /** A WorkAdapter that records the statuses it writes and can refuse them, as a failing host would. */
-function fakeAdapter(options: { written: Written[]; reads: string[]; itemStatus: string; failWrite?: boolean
+function fakeAdapter(options: { written: Written[]; reads: string[]; itemStatus: string; failWrite?: boolean | Error
   failRead?: Error }): WorkAdapter {
   return {
     host: 'projex',
@@ -43,7 +43,7 @@ function fakeAdapter(options: { written: Written[]; reads: string[]; itemStatus:
     listNotes: async () => ({ notes: [] }),
     postNote: async () => 'sent',
     setStatus: async (_commands, target, status) => {
-      if (options.failWrite) throw new Error('HTTP 500 from the status endpoint')
+      if (options.failWrite) throw options.failWrite instanceof Error ? options.failWrite : new Error('HTTP 500 from the status endpoint')
       options.written.push({ key: target.key, status })
     },
     page: () => '',
@@ -51,7 +51,7 @@ function fakeAdapter(options: { written: Written[]; reads: string[]; itemStatus:
 }
 /** A SourceContext with one followed thread, the tickets named by `tickets`, and a state store the ledger persists through. */
 function fakeContext(options: { threads?: Thread[]; tickets?: Record<string, Partial<Ticket> | undefined>; noTrigger?: boolean
-  itemStatus?: string; failWrite?: boolean; failRead?: Error } = {}): Fake {
+  itemStatus?: string; failWrite?: boolean | Error; failRead?: Error } = {}): Fake {
   const store = new Map<string, unknown>()
   const written: Written[] = []
   const reads: string[] = []
@@ -69,7 +69,7 @@ function fakeContext(options: { threads?: Thread[]; tickets?: Record<string, Par
     triggers: { latest: () => options.noTrigger ? undefined : trigger },
     tickets: { get: (id: string) => tickets[id] as unknown as Ticket | undefined },
   }
-  const adapter = fakeAdapter({ written, reads, itemStatus: options.itemStatus ?? 's1', ...options.failWrite ? { failWrite: true } : {},
+  const adapter = fakeAdapter({ written, reads, itemStatus: options.itemStatus ?? 's1', ...options.failWrite ? { failWrite: options.failWrite } : {},
     ...options.failRead ? { failRead: options.failRead } : {} })
   return { ctx: ctx as unknown as SourceContext, adapter, store, written, reads, patched }
 }
@@ -127,6 +127,25 @@ describe('reflectWorkTickets', () => {
     expect(fake.patched).toEqual([{ key: 'projex:ab12', meta: { gone: true } }])
     // The phase is remembered, so the next round neither retries nor reports it again.
     expect(ledgerOf(fake).t1!.start).toBe(true)
+  })
+  it('reports a rejected status transition instead of marking the work item gone', async () => {
+    // `InvaildData.Failed` is also Projex's code for a transition its state machine refuses (处理中 -> 已完成). Treating it
+    // as a deletion marked live items gone and stopped their Threads from ever being read (ESFX-6305, ESFX-6306).
+    const rejected = new YunxiaoHttpError(400, 'Yunxiao request failed with HTTP 400: {"errorCode":"InvaildData.Failed",'
+      + '"errorMessage":"当前状态:处理中不能流转到目标状态:已完成"}')
+    const fake = fakeContext({ failWrite: rejected })
+    const result = await reflectWorkTickets(fake.ctx, fake.adapter, { instance: 'projex', statuses })
+    expect(fake.patched).toEqual([])
+    expect(result.written).toBe(0)
+    expect(result.errors).toHaveLength(1)
+    // The phase stays unsettled, so a corrected status is retried instead of being given up on.
+    expect(ledgerOf(fake).t1!.start).toBeUndefined()
+  })
+  it('still treats a vanished work item as gone when Yunxiao answers 404', async () => {
+    const missing = new YunxiaoHttpError(404, 'Yunxiao request failed with HTTP 404: {"errorCode":"InvalidWorkitem.NotFound"}')
+    const fake = fakeContext({ failRead: missing })
+    expect(await reflectWorkTickets(fake.ctx, fake.adapter, { instance: 'projex', statuses })).toEqual({ written: 0, errors: [] })
+    expect(fake.patched).toEqual([{ key: 'projex:ab12', meta: { gone: true } }])
   })
   it('falls back to the thread ref when the thread has no Trigger, so a restart still finds the item', async () => {
     const fake = fakeContext({ noTrigger: true, threads: [thread(['t1'])] })

@@ -237,11 +237,18 @@ async function observeNotes(ctx: SourceContext, adapter: WorkAdapter, instance: 
   const errors: string[] = []
   if (signal?.aborted) return { received, errors }
   const openIds = new Set((ctx.tickets?.open?.() ?? []).map(ticket => ticket.id))
+  // A Thread stays followed after its ticket ends: an executor-completed ticket waits for a person's comment to resume,
+  // so its comments must keep being read. A human stop withdraws that, and a Thread followed only for context never resumes.
+  const followed = (thread: { subscriptions: string[]; context?: string[] }, ticketId: string): boolean => {
+    if (openIds.has(ticketId)) return true
+    const ticket = ctx.tickets?.get?.(ticketId)
+    return !!ticket && !!ticket.ended && ticket.ended.by !== 'human' && !thread.context?.includes(ticketId)
+  }
   for (const thread of ctx.threads?.subscribed?.(instance) ?? []) {
     if (signal?.aborted) break
     // A work item in the recycle bin is gone; its Thread stays but is never read again.
     if (thread.meta.gone === true) continue
-    if (!thread.subscriptions.some(id => openIds.has(id))) continue
+    if (!thread.subscriptions.some(id => followed(thread, id))) continue
     const itemKey = thread.ref.id
     if (!itemKey) continue
     const latest = ctx.triggers.latest(thread.key)

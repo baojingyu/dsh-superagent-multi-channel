@@ -36,7 +36,7 @@ function fakeAdapter(items: (categories: readonly string[]) => WorkItem[] = () =
 interface FakeContext { ctx: SourceContext; received: Trigger[]; store: Map<string, unknown>
   patched: { key: string; meta: Record<string, unknown> }[] }
 /** What a comment-polling round needs: the threads to follow, the open tickets, and the newest Trigger on a thread. */
-interface FakeContextOptions { threads?: Thread[]; open?: Ticket[]; latest?: Trigger }
+interface FakeContextOptions { threads?: Thread[]; open?: Ticket[]; ended?: Ticket[]; latest?: Trigger }
 /** A SourceContext stand-in with an in-memory store, per-instance config, and received-Trigger tracking. */
 function fakeContext(configs: Record<string, Record<string, unknown>> = {}, options: FakeContextOptions = {}): FakeContext {
   const store = new Map<string, unknown>()
@@ -58,7 +58,8 @@ function fakeContext(configs: Record<string, Record<string, unknown>> = {}, opti
         const target = (options.threads ?? []).find(item => item.key === key)
         if (target) target.meta = { ...target.meta, ...meta }
       } },
-    tickets: { open: () => options.open ?? [] },
+    // A ticket the store still holds after it ended is what keeps a Thread followed; `ended` seeds those.
+    tickets: { open: () => options.open ?? [], get: (id: string) => [...options.open ?? [], ...options.ended ?? []].find(ticket => ticket.id === id) },
     triggers: { get: (id: string) => triggers.get(id), latest: () => options.latest },
   }
   return { ctx: ctx as unknown as SourceContext, received, store, patched }
@@ -256,6 +257,32 @@ describe('pollWorkItems comment triggers', () => {
     await pollWorkItems(fake.ctx, { ...inner, listNotes: async () => { throw gone } },
       { instance: 'projex', project: 'proj-1', categories: ['bug'] })
     expect(fake.patched).toHaveLength(1)
+  })
+
+  it('keeps reading comments after an executor ended the ticket, and delivers a person\'s reply', async () => {
+    // The only channel that can resume an ended ticket is its Thread, so an executor-completed ticket must keep being read
+    // (ESFX-6305: a later comment never became a Trigger because the poll skipped every Thread without an open ticket).
+    const reads: string[] = []
+    const inner = adapter()
+    const ended = { id: 't1', ended: { at: '2026-11-02T03:00:00.000Z', by: 'executor', outcome: 'completed' } } as unknown as Ticket
+    const fake = fakeContext({ projex: { project: 'proj-1' } },
+      { threads: [thread(['t1'])], open: [], ended: [ended], latest })
+    await pollWorkItems(fake.ctx, { ...inner, listNotes: async (_c, _p, key) => { reads.push(key); return { notes } } },
+      { instance: 'projex', project: 'proj-1', categories: ['bug'] })
+    expect(reads).toEqual(['AB-12'])
+    expect(fake.received.map(trigger => trigger.meta.commentId)).toEqual(['c1'])
+  })
+
+  it('reads nothing for a thread whose ticket a person stopped', async () => {
+    const reads: string[] = []
+    const inner = adapter()
+    const stopped = { id: 't1', ended: { at: '2026-11-02T03:00:00.000Z', by: 'human', outcome: 'stopped' } } as unknown as Ticket
+    const fake = fakeContext({ projex: { project: 'proj-1' } },
+      { threads: [thread(['t1'])], open: [], ended: [stopped], latest })
+    await pollWorkItems(fake.ctx, { ...inner, listNotes: async (_c, _p, key) => { reads.push(key); return { notes } } },
+      { instance: 'projex', project: 'proj-1', categories: ['bug'] })
+    expect(reads).toEqual([])
+    expect(fake.received).toEqual([])
   })
 
   it('reads no comments for a thread whose ticket is not open', async () => {

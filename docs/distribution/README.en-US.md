@@ -2,7 +2,7 @@
 
 > Language: [English](README.en-US.md) · [中文](README.md)
 
-**Status: `2.5.3` is published to npm and pushed (2026-11-17), and `latest` points at it; `2.5.2` is superseded by it, and `2.5.1` is deprecated (its packument entry became visible before its tarball, so it could not be installed for several minutes after release).**
+**Status: `2.5.4` is pushed and released on GitHub (2026-11-18); npm publish is still blocked by the 2FA item below, so `latest` on the registry remains `2.5.3`. Install `2.5.4` from the GitHub release tarball until the npm token is fixed.**
 
 ## Completed
 

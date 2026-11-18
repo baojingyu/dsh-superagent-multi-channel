@@ -3,6 +3,28 @@
 Versions follow semantic versioning; each release is published to the plugin market under the package name
 `dsh-superagent-multi-channel`, so a user upgrades by installing the new version.
 
+## 2.5.4
+
+A finished work item answers a person's later comment again.
+
+A Projex work item that had been dispatched and finished stopped hearing anything: the comment poll
+read only Threads with an open ticket, and a comment is the only channel that can resume an ended
+one. ESFX-6305 lost its 05:57, 06:02, 06:03 and 06:18 comments that way, and ESFX-6306 its 05:55,
+06:03 and 06:11 — the agent never saw the requests, so nothing could be accepted.
+
+- **A Thread stays followed after its ticket ends.** `observeNotes` now reads a Thread while its
+  ticket is ended by anything but a person: an executor-completed or failed ticket waits for a
+  person's comment to resume it under its unchanged Mandate. A human stop still withdraws that, and
+  a Thread followed only for context never resumes. This is the rule the 1.x line already carried
+  (`1.0.7`, "Keep reading work-item comments on a Thread whose ticket ended"); 2.x did not.
+- **A rejected status transition is no longer read as a deleted work item.** `isWorkItemGone`
+  matched `InvaildData.Failed`, which is also Projex's code when its state machine refuses a
+  transition (`当前状态:处理中不能流转到目标状态:已完成`). Every rejected write-back therefore marked a live
+  item `gone` — a permanent flag — and stopped its Thread from being read at all, while a genuinely
+  deleted item (HTTP 404 `InvalidWorkitem.NotFound`) was not recognised. Only a vanished resource
+  counts now, and a rejected transition is reported in the poll's errors with its phase left
+  unsettled, so a corrected status is retried instead of being given up on.
+
 ## 2.5.3
 
 An Issue reaches the agent even when the agent CLI is signed in with the operator's own GitHub account.

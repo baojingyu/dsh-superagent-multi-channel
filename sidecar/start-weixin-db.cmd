@@ -29,7 +29,9 @@ setlocal
 rem --- set these for your machine -------------------------------------------
 set "PY=python"
 if not "%WECHATAUTO_VENV%"=="" set "PY=%WECHATAUTO_VENV%\Scripts\python.exe"
-set "TOKEN_FILE=%~dp0..\secrets\weixin-db.token"
+rem The plugin passes the token file it wrote itself, so the panel and this script can never disagree about the path;
+rem the fallback keeps a hand-run script working.
+if not "%WXBRIDGE_TOKEN_FILE%"=="" (set "TOKEN_FILE=%WXBRIDGE_TOKEN_FILE%") else (set "TOKEN_FILE=%~dp0..\secrets\weixin-db.token")
 rem Optional: set WXBRIDGE_PROFILE=team (or readonly) to pick the profile without
 rem editing the command line; an explicit --profile argument also passes through.
 set "PROFILE_ARG="

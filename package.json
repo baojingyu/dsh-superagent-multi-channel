@@ -2,7 +2,7 @@
   "name": "dsh-superagent-multi-channel",
   "author": "DeepSeek Harness Team <team@dsh.dev>",
   "license": "MIT",
-  "version": "2.5.4",
+  "version": "2.5.5",
   "description": "Extra chat and work channels for DSH as a standalone bundle: WeChat, Feishu, DingTalk, WeCom, GitLab, Yunxiao Projex and GitHub. A Source receives a request, a Policy decides whether it becomes work, and each Ticket runs in its own DSH Session. Installs alongside the official superagent under its own name.",
   "repository": {
     "type": "git",
@@ -68,7 +68,9 @@
     "sidecar/weixin-ilink-bridge/lib/*.mjs",
     "sidecar/start-weixin-db.cmd",
     "sidecar/start-weixin-db-team.cmd",
-    "sidecar/start-weixin-ilink.cmd"
+    "sidecar/start-weixin-ilink.cmd",
+    "sidecar/start-weixin-db-team.sh",
+    "sidecar/start-weixin-ilink.sh"
   ],
   "dsh": {
     "bundle": {

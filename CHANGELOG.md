@@ -3,6 +3,76 @@
 Versions follow semantic versioning; each release is published to the plugin market under the package name
 `dsh-superagent-multi-channel`, so a user upgrades by installing the new version.
 
+## 2.5.5
+
+The WeChat bridge starts, stops, restarts and is checked from the panel on macOS and Linux too, and a fresh install no
+longer fails on a token file nobody could name.
+
+The report on macOS read `The bridge token file undefined is missing` and every one of the panel's five WeChat actions
+failed with it. `tokenFile` and `selfWxid` were both required by the configuration schema, so a fresh install with no
+stored settings failed validation as a whole; `SourceRegistry.resolve` then returned the instance disabled with an empty
+`config: {}`, and all five actions ran on that empty record. Reading a token from it threw on an absent path rather than
+naming the setting, so the answer described a file nobody could create instead of a setting nobody had filled in. Nothing
+in that chain was actionable, which is why the reader, the schema, and the launchers are all changed together.
+
+- **A reader that was handed no path says so.** `readSecretFile` now distinguishes "no path is configured" from "the file
+  at this path is missing": the first names the setting and points at Start bridge, which writes its own file; the second
+  keeps naming the resolved file to create. It is what stops a configuration fault from being printed as
+  `The bridge token file undefined is missing`, which named no file at all.
+- **The token file has a default path, and Start bridge writes it.** `tokenFile` is optional, and an empty value means the
+  same as an absent one: clearing the field in the panel stores `''`, and rejecting that would discard the whole saved
+  record and turn the Source off. On a POSIX host the default is
+  `~/.dsh/state/dsh-superagent-multi-channel/secrets/weixin-<profile>-bridge.token` - this package's own directory, not
+  `defaultStateDir()`, which follows a pre-2.3 installation that may belong to another plugin. On Windows it is the path
+  the shipped `.cmd` launchers already read, `<package>\secrets\{ilinkbridge,weixin-db}.token`, because the scheduled task
+  passes no environment of ours and a default elsewhere would leave the client and the `.cmd` naming two different files.
+  `ensureBridgeToken` creates `secrets/` as 0700, writes a random 32-byte token as 0600 with an exclusive create, and
+  tightens a file that already exists without rewriting it, so the token a running sidecar authenticates with stays valid
+  across a restart. Start, Check and the polling loop all call it, and the launcher is handed the same path, so the panel
+  and the sidecar can never disagree about which file holds the bearer token.
+- **`selfWxid` may be left blank.** The schema accepts an empty value, and `@` detection then uses the wxid the bridge
+  reports it is signed in as. A person is no longer required to copy an opaque id out of the client before the Source can
+  be switched on; a configured wxid still takes precedence.
+- **macOS and Linux start and stop the bridge from the panel.** Two POSIX launchers join the Windows ones:
+  `sidecar/start-weixin-ilink.sh` (iLink) and `sidecar/start-weixin-db-team.sh` (team, which explains on a POSIX host that
+  the community backend is Windows-only). When no launcher is configured, a non-Windows host falls back to the launcher
+  this repository ships for its profile; Windows keeps resolving to nothing there, which is what makes its actions fall
+  through to `schtasks`. Stop reads the listening PID with `lsof -nP -iTCP:<port> -sTCP:LISTEN -t` on a POSIX host instead
+  of `netstat`, whose failure used to be swallowed into "nothing is listening" - so Stop reported an idle machine while the
+  bridge was still running - and identifies the process with `ps -p <pid> -o command=` before ending it with `kill -TERM`,
+  the signal the sidecar's own handler turns into a clean client release. A process whose command line does not name a
+  WeChat bridge is still left untouched. A `.sh` launcher runs through `/bin/sh` because a file unpacked from a tarball
+  carries no executable bit; the argv stays explicit either way.
+- **On a non-Windows host the 4.1.12.55 button explains instead of calling `powershell`.** The pinned build is a Windows
+  installer for the community backend, so asking a Mac for `powershell` could only fail. The action now returns that the
+  installer is Windows-only and that `personal` (iLink) needs no desktop client.
+- **The two backends are not interchangeable, and the panel now says so.** `personal` is iLink, Tencent's official
+  channel: neither the operating system nor the WeChat client version bounds it, and it needs no desktop client. `team` is
+  the community, open-source route (`wechatauto-replica` / `weixin-db-bridge`), which reads a signed-in desktop client's
+  local database: Windows and WeChat 4.1.12.55 only.
+- **Windows semantics are unchanged.** `schtasks /run|/end /tn` keeps the same explicit argv and the same task-name
+  validation, `taskkill /PID <pid> /T /F` still ends the tree, and the 0600 bit test is still skipped on `win32`, where
+  Node synthesises the mode and owner-only is the ACL's job. The `.cmd` launchers keep their old behaviour too: they read
+  `WXBRIDGE_TOKEN_FILE` when the plugin passes it and otherwise fall back to their previous path, so a hand-run script
+  still works - and because the scheduled task cannot carry that environment, Start bridge now writes the token at the same
+  package path the `.cmd` falls back to before it asks the task to run, so the two no longer disagree.
+- **Owner-only is enforced on macOS for real.** `chmod 600` sets the mode and leaves extended ACLs untouched, so a token
+  file could read `-rw-------` while an access control entry still let `everyone` read it. `requireOwnerOnly` now also
+  reads the ACL (`ls -led`, cached by inode and change time so a per-request read costs nothing) and refuses any entry
+  beyond the owner, naming it and the `chmod -N <file>` that clears it. Windows is unaffected: it returns before this runs.
+- **The vendored iLink client is actually in the package again.** `sidecar/weixin-ilink-bridge/lib/*.mjs` was matched by
+  the root `.gitignore` rule `lib/`, which is meant for build output, so it was never committed: a fresh install had the
+  launcher but the sidecar could not import its client and would not start. The files are now tracked (`.gitignore`
+  re-includes that one directory) and `npm pack` carries them; the two POSIX launchers are listed in `files` as well.
+- **A fresh install stays an off row until a person turns it on.** A fully defaulted schema parses with no stored settings,
+  and the registry previously treated that as "enabled". WeChat needs a QR login before it can do anything, so the kind now
+  declares `defaultEnabled: false`: an unconfigured install shows as off instead of polling `:9300` every five seconds and
+  writing a token file on its own.
+- **Start reports a launcher that exits, instead of a bridge that never rose.** The launchers exit non-zero when the backend
+  cannot start (no iLink credentials, the team profile on a POSIX host, no `node`). Start used to wait out its whole budget
+  and return the configured port anyway, which read as `已启动桥` for a bridge that was not running. It now watches the
+  child: an exit before the port file appears fails with the launcher's reason, and no port file by the deadline fails too.
+
 ## 2.5.4
 
 A finished work item answers a person's later comment again.

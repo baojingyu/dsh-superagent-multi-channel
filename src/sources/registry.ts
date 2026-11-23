@@ -196,7 +196,7 @@ export class SourceRegistry implements SourceScope {
    */
   private resolve(kind: SourceKind, id: string, stored: { enabled: boolean; config: Record<string, unknown> } | undefined): SourceInstance {
     const parsed = kind.schema.safeParse(stored?.config ?? {})
-    if (parsed.success) return { id, kind: kind.kind, enabled: stored?.enabled ?? true, config: parsed.data }
+    if (parsed.success) return { id, kind: kind.kind, enabled: stored?.enabled ?? kind.defaultEnabled ?? true, config: parsed.data }
     const defaults = kind.schema.safeParse({})
     return { id, kind: kind.kind, enabled: false, config: defaults.success ? defaults.data : {} }
   }

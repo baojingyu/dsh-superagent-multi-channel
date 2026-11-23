@@ -56,6 +56,13 @@ describe('requireOwnerOnly', () => {
 })
 
 describe('readSecretFile', () => {
+  it('names the setting when no path is configured, instead of printing `undefined` as a path', () => {
+    // "No path is configured" and "the file at this path is missing" are different faults. This one names the setting and
+    // points at Start bridge, which writes its own file; the old code printed `undefined` as the file, which named nothing.
+    expect(() => readSecretFile('', 'bridge token file')).toThrow(/No bridge token file path is configured/)
+    expect(() => readSecretFile(undefined as unknown as string, 'bridge token file')).toThrow(/No bridge token file path is configured/)
+  })
+
   it('reads and trims the file on Windows, where only the structural checks apply', async () => {
     await withPlatform('win32', () => {
       expect(readSecretFile(tokenFile, 'bridge token file')).toBe('secret')

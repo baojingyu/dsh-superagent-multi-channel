@@ -3,7 +3,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { key, type Trigger } from '../core/index.ts'
 import { KV } from '../kv.ts'
 import { createBridgeClient, type BridgeClient, type BridgeInboundOptions } from './chat/weixin/bridge.ts'
-import { rememberWeixinConfig, rememberWeixinStatus, resolveBaseUrl, SOURCE, weixinKind, type WeixinConfig } from './chat/weixin/kind.ts'
+import { bridgeTokenPath, ensureBridgeToken, rememberWeixinConfig, rememberWeixinStatus, resolveBaseUrl, SOURCE, weixinKind, type WeixinConfig } from './chat/weixin/kind.ts'
 import type { ChatEvent } from './chat/port.ts'
 import { health, sourceContext, type SourceContext } from './host.ts'
 import { pause } from './poll.ts'
@@ -124,8 +124,12 @@ export async function pollRound(ctx: SourceContext, config: WeixinConfig, signal
   // random port discovered at start time) without awaiting anything.
   rememberWeixinConfig(config)
   // The bridge is a parameter so a test can drive a round without a token file on disk. Otherwise resolve the real port the
-  // launcher's sidecar bound (resolveBaseUrl) rather than the configured URL.
-  const bridge = supplied ?? createBridgeClient({ baseUrl: resolveBaseUrl(config), tokenFile: config.tokenFile, timeoutMs: config.timeoutSeconds * 1000 })
+  // launcher's sidecar bound (resolveBaseUrl) rather than the configured URL, and make sure the token file the client reads
+  // exists (0600) before the first call - a fresh install has no hand-created file.
+  const bridge = supplied ?? (() => {
+    ensureBridgeToken(config)
+    return createBridgeClient({ baseUrl: resolveBaseUrl(config), tokenFile: bridgeTokenPath(config), timeoutMs: config.timeoutSeconds * 1000 })
+  })()
   // `/health` carries what the backend can actually do, and `scope` must answer synchronously, so it is read once per round
   // and remembered beside the status. It is a loopback call, and reading it every round is what lets a backend swap be
   // noticed without restarting this plugin.

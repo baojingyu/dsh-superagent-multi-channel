@@ -1,7 +1,7 @@
 /**
- * Source card actions: the WeChat bridge is a separate, long-lived process, so the panel only asks the machine's scheduled task to
- * start or stop it. These tests pin the two properties that make that safe - the fixed argv, and the refusal of anything that is not
- * a task name.
+ * Source card actions: the WeChat bridge is a separate, long-lived process, so the panel only asks the machine's scheduled task
+ * (Windows) or the shipped POSIX launcher (macOS/Linux) to start or stop it. These tests pin the properties that make that
+ * safe - the fixed argv, the refusal of anything that is not a task name - and the platform-specific paths each host takes.
  */
 import { describe, expect, it } from 'vitest'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -11,6 +11,7 @@ import type { SourceHost } from '../src/sources/host.ts'
 import { WeixinConfigSchema, portFilePath, resolveBaseUrl, startLauncher, weixinKind } from '../src/sources/chat/weixin/kind.ts'
 
 const action = (id: string) => weixinKind.actions!.find(item => item.id === id)!
+const windows = process.platform === 'win32'
 
 function hostOf(calls: string[][]): SourceHost {
   return {
@@ -28,25 +29,30 @@ describe('WeChat bridge actions', () => {
       .toEqual(['bridge.start', 'bridge.stop', 'bridge.restart', 'bridge.check', 'wechat.install-version'])
   })
 
-  it('opens the pinned WeChat 4.1.12.55 download page with powershell Start-Process, only for team', async () => {
+  it('opens the pinned WeChat 4.1.12.55 download page with powershell Start-Process on Windows, and declines elsewhere', async () => {
     const calls: string[][] = []
     const message = await action('wechat.install-version').run(hostOf(calls), { ...config, profile: 'team' })
-    // `&` must not reach cmd; Start-Process is the safe opener, and the URL is the only argument that carries meaning.
-    expect(calls).toEqual([['powershell', '-NoProfile', '-NonInteractive', '-Command',
-      "Start-Process 'https://github.com/Rodert/wechat-win-versions/releases/tag/v4.1.12.55'"]])
     expect(message).toContain('4.1.12.55')
+    if (windows) {
+      // `&` must not reach cmd; Start-Process is the safe opener, and the URL is the only argument that carries meaning.
+      expect(calls).toEqual([['powershell', '-NoProfile', '-NonInteractive', '-Command',
+        "Start-Process 'https://github.com/Rodert/wechat-win-versions/releases/tag/v4.1.12.55'"]])
+    } else {
+      // The team build is a Windows-only installer; a POSIX host is told so instead of running powershell.
+      expect(calls).toEqual([])
+    }
     expect(action('wechat.install-version').ready!({ ...config, profile: 'team' })).toBe(true)
     expect(action('wechat.install-version').ready!({ ...config, profile: 'personal' })).toBe(false)
   })
 
-  it('starts by asking the configured task to run, with a fixed argv', async () => {
+  it.runIf(process.platform === 'win32')('starts by asking the configured task to run, with a fixed argv', async () => {
     const calls: string[][] = []
     const message = await action('bridge.start').run(hostOf(calls), config)
     expect(calls).toEqual([['schtasks', '/run', '/tn', 'DSH-WeChat-Bridge']])
     expect(message).toContain('启动')
   })
 
-  it('restarts by ending then running the same task', async () => {
+  it.runIf(process.platform === 'win32')('restarts by ending then running the same task', async () => {
     const calls: string[][] = []
     await action('bridge.restart').run(hostOf(calls), { ...config, bridgeTask: 'My-Bridge' })
     expect(calls).toEqual([['schtasks', '/end', '/tn', 'My-Bridge'], ['schtasks', '/run', '/tn', 'My-Bridge']])
@@ -55,7 +61,8 @@ describe('WeChat bridge actions', () => {
   it('is ready once a launcher or a task name is set', () => {
     expect(action('bridge.start').ready!(config)).toBe(true)
     expect(action('bridge.start').ready!({ ...config, bridgeLauncher: 'C:\\x\\start.cmd' })).toBe(true)
-    expect(action('bridge.start').ready!({ ...config, bridgeTask: '', bridgeLauncher: '' })).toBe(false)
+    // An empty config still has a launcher on a POSIX host (the one this package ships); on Windows it has none.
+    expect(action('bridge.start').ready!({ ...config, bridgeTask: '', bridgeLauncher: '' })).toBe(!windows)
   })
 
   it('refuses to start through a launcher that is not there', async () => {
@@ -79,23 +86,26 @@ describe('WeChat bridge actions', () => {
       context: () => ({ commands: { withSignal: () => ({ run: async (program: string, args: string[]) => {
         ran.push([program, ...args])
         if (program === 'netstat') return '  TCP    127.0.0.1:9300    0.0.0.0:0    LISTENING    4242'
-        if (program === 'powershell') return 'C:\\Windows\\explorer.exe'
+        if (program === 'lsof') return '4242\n'
+        if (program === 'powershell' || program === 'ps') return 'C:\\Windows\\explorer.exe'
         return ''
       } }) } }),
     } as unknown as SourceHost
     await expect(action('bridge.stop').run(host, { ...config, bridgeLauncher: 'C:\\x\\start.cmd' }))
       .resolves.toContain('不是微信桥')
-    expect(ran.some(([program]) => program === 'taskkill')).toBe(false)
+    expect(ran.some(([program]) => program === 'taskkill' || program === 'kill')).toBe(false)
   })
 
   it('refuses a task name that is not a task name, at the schema and again at the call', async () => {
     // The schema rejects it on save...
     expect(WeixinConfigSchema.safeParse({ ...config, bridgeTask: 'DSH & calc.exe' }).success).toBe(false)
     expect(WeixinConfigSchema.safeParse({ ...config, bridgeTask: 'x; rm -rf /' }).success).toBe(false)
-    // ...and the runner refuses it too, so a stale stored value still cannot reach a command line.
-    const calls: string[][] = []
-    await expect(action('bridge.start').run(hostOf(calls), { ...config, bridgeTask: 'x; calc' })).rejects.toThrow()
-    expect(calls).toEqual([])
+    // ...and (on the host that uses a task) the runner refuses it too, so a stale stored value still cannot reach a command line.
+    if (windows) {
+      const calls: string[][] = []
+      await expect(action('bridge.start').run(hostOf(calls), { ...config, bridgeTask: 'x; calc' })).rejects.toThrow()
+      expect(calls).toEqual([])
+    }
   })
 
   it('reports the bridge capability when the health read says it is up', async () => {
@@ -111,7 +121,7 @@ describe('startLauncher and the random-port contract', () => {
   it('resolves the real port from the launcher port file, else the configured URL', () => {
     const baseUrl = 'http://127.0.0.1:9401'
     const file = portFilePath('personal', baseUrl)
-    // No launcher -> the configured URL is used as-is.
+    // No launcher -> the configured URL is used as-is (a launcher is never the reason a URL changes here).
     expect(resolveBaseUrl({ profile: 'personal', baseUrl })).toBe(baseUrl)
     // A launcher but no port file yet -> still the configured URL.
     expect(resolveBaseUrl({ profile: 'personal', baseUrl, bridgeLauncher: 'C:\\x\\start.cmd' })).toBe(baseUrl)
@@ -126,9 +136,12 @@ describe('startLauncher and the random-port contract', () => {
 
   it('spawns the launcher detached and returns the port it wrote back', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'dsh-weixin-test-'))
-    const launcher = join(dir, 'start.cmd')
-    // A stand-in sidecar: it honours the port-file contract by writing the port it "bound".
-    writeFileSync(launcher, '@echo off\r\n> "%WXBRIDGE_PORT_FILE%" echo 54321\r\n')
+    // A platform-appropriate stand-in launcher: a batch file on Windows, a shell script elsewhere. It honours the port-file
+    // contract by writing the port it "bound", which is all startLauncher reads back.
+    const launcher = join(dir, windows ? 'start.cmd' : 'start.sh')
+    writeFileSync(launcher, windows
+      ? '@echo off\r\n> "%WXBRIDGE_PORT_FILE%" echo 54321\r\n'
+      : '#!/bin/sh\nprintf 54321 > "$WXBRIDGE_PORT_FILE"\n')
     const config = { ...WeixinConfigSchema.parse({ tokenFile: '/tmp/weixin.token', selfWxid: 'wxid_self' }), bridgeLauncher: launcher }
     try {
       const started = await startLauncher(hostOf([]), config)
@@ -136,7 +149,7 @@ describe('startLauncher and the random-port contract', () => {
       // The port file the launcher wrote is what the readers now resolve to.
       expect(resolveBaseUrl(config)).toBe('http://127.0.0.1:54321')
     } finally {
-      // The detached cmd child keeps the temp dir as its cwd for a moment after it exits;
+      // The detached child keeps the temp dir as its cwd for a moment after it exits;
       // give it a beat and retry the delete so Windows stops reporting EBUSY.
       await new Promise(resolve => setTimeout(resolve, 500))
       rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })

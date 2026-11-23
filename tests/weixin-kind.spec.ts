@@ -42,8 +42,12 @@ describe('weixinKind schema and fields', () => {
     expect(weixinKind.health).toEqual(['weixin'])
   })
 
-  it('rejects empty credentials, malformed IDs, out-of-range poll intervals, and unknown keys', () => {
-    expect(weixinKind.schema.safeParse({ tokenFile: '', selfWxid: 'wxid_self' }).success).toBe(false)
+  it('rejects malformed IDs and out-of-range poll intervals, and resolves an absent token file to a default path', () => {
+    // An empty or absent token file is accepted: the schema resolves it to this profile's default path, which the plugin writes,
+    // so a fresh install can be switched on without a hand-created file. This is the fix for "bridge token file undefined".
+    expect(weixinKind.schema.safeParse({ tokenFile: '', selfWxid: 'wxid_self' }).success).toBe(true)
+    expect(weixinKind.schema.safeParse({}).success).toBe(true)
+    expect(WeixinConfigSchema.parse({}).tokenFile).toMatch(/ilinkbridge\.token$|weixin-personal-bridge\.token$/)
     expect(weixinKind.schema.safeParse({ tokenFile: '/tmp/t', selfWxid: 'bad wxid' }).success).toBe(false)
     expect(weixinKind.schema.safeParse({ tokenFile: '/tmp/t', selfWxid: 'wxid_self', pollSeconds: 4 }).success).toBe(false)
     expect(weixinKind.schema.safeParse({ tokenFile: '/tmp/t', selfWxid: 'wxid_self', pollSeconds: 3601 }).success).toBe(false)

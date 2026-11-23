@@ -1,5 +1,10 @@
 node_modules/
 lib/
+# `lib/` above is build output. The iLink sidecar's vendored protocol client is hand-written source, not build output, and the
+# sidecar imports it at run time (`server.mjs` → `./lib/ilink.mjs`), so it must be tracked and packed. Re-include that one
+# directory (and its files) after the broad rule.
+!sidecar/weixin-ilink-bridge/lib/
+!sidecar/weixin-ilink-bridge/lib/*.mjs
 .artifacts/
 .env
 coverage/

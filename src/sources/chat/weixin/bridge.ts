@@ -263,7 +263,7 @@ export function createBridgeClient(options: BridgeOptions): BridgeClient {
    * just the status code.
    */
   function failure(status: number, body: unknown, what: string): Error {
-    if (status === 401) return new Error('unauthorized')
+    if (status === 401) return new Error("unauthorized: the bridge rejected this client's token. It reads its token once at start-up, so a token file rewritten since then no longer matches - restart the bridge (「重启桥」) to pick up the current file")
     const answered = record(body)
     const code = text(answered.error)
     const detail = headline(text(answered.detail))

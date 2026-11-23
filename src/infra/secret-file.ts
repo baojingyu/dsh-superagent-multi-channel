@@ -8,11 +8,42 @@
  */
 import { readFileSync, statSync } from 'node:fs'
 import type { Stats } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 
 /** A permission mode as the three octal digits a POSIX operator reads: `666`, not `438`. */
 const octal = (mode: number): string => (mode & 0o777).toString(8).padStart(3, '0')
+
+/**
+ * ACL answers already read, keyed by path + inode + ctime + size. Bounded because a long-lived host reads a handful of secret
+ * files; the cap only stops a test suite that makes a new temp file per case from growing it without limit.
+ */
+const aclCache = new Map<string, string>()
+const ACL_CACHE_MAX = 64
+
+/**
+ * The access control entries a macOS file carries besides its POSIX bits, as `ls -le` prints them, or `''` when there are none.
+ *
+ * `chmod 600` on macOS sets the mode and leaves extended ACLs alone, so a file can read `-rw-------` and still grant another
+ * account - or `everyone` - read access; `st.mode` cannot see that, which makes the bit test necessary but not sufficient.
+ * Only macOS has this layer: Linux reports no entry in this form, and Windows is skipped before this is reached. A failed read
+ * of the ACL refuses the file, because an unproven guarantee is what the check exists to avoid.
+ */
+function aclGrants(file: string, info: Stats): string {
+  if (process.platform !== 'darwin') return ''
+  const stamp = `${file}\u0000${info.ino}\u0000${info.ctimeMs}\u0000${info.size}`
+  const hit = aclCache.get(stamp)
+  if (hit !== undefined) return hit
+  let listing: string
+  try {
+    listing = execFileSync('ls', ['-led', file], { encoding: 'utf8', timeout: 5000 })
+  } catch { return 'the ACL could not be read' }
+  const extra = listing.split('\n').slice(1).map(line => line.trim()).filter(line => /^\d+:\s/.test(line)).join('; ')
+  if (aclCache.size >= ACL_CACHE_MAX) aclCache.clear()
+  aclCache.set(stamp, extra)
+  return extra
+}
 
 /**
  * Resolves the path of a secret file the way the operator wrote it in a settings field, or refuses it.
@@ -44,6 +75,9 @@ export function resolveSecretPath(file: string): string {
 export function requireOwnerOnly(mode: number, file: string, what: string): void {
   if (process.platform === 'win32') return
   if ((mode & 0o777) !== 0o600) throw new Error(`${what} must have mode 0600, not ${octal(mode)}: ${file}`)
+  // 0600 bits are necessary but not sufficient on macOS, where an extended ACL can still grant another account read access.
+  const extra = aclGrants(file, statSync(file))
+  if (extra !== '') throw new Error(`${what} carries an access control entry beyond its owner, so the 0600 bits alone do not keep it private (${extra}): ${file} - remove it with chmod -N ${file}`)
 }
 
 /**
@@ -57,6 +91,10 @@ export function requireOwnerOnly(mode: number, file: string, what: string): void
  * which is the file to create when the configured one is refused as relative.
  */
 export function readSecretFile(file: string, what: string): string {
+  // "No path is configured" is a different fact from "the file at this path is missing": the first names the setting and
+  // points at the action that writes its own file, the second names the resolved file to create. Printing `undefined` as a
+  // path named neither, so a configuration fault read as a file nobody could find.
+  if (typeof file !== 'string' || file.trim() === '') throw new Error(`No ${what} path is configured, so there is no file to read: set the path in this Source's settings, or start the bridge, which writes its own token file and keeps it owner-only (0600, or an ACL on Windows)`)
   const path = resolveSecretPath(file)
   let info: Stats
   try { info = statSync(path) } catch {

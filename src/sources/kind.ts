@@ -126,6 +126,12 @@ export interface TriggerContext {
 export interface SourceKind<C extends Record<string, unknown> = Record<string, unknown>> {
   /** Stable ID; a default instance with the same ID exists when none is stored. */
   kind: string
+  /**
+   * Whether a registered kind with no stored settings starts enabled. Defaults to true: a kind whose schema requires input shows
+   * as an off row anyway because its default parse fails, but a fully defaulted kind needs this flag to stay off until a person
+   * turns it on (WeChat needs a QR login before it can do anything).
+   */
+  defaultEnabled?: boolean
   title: Localized
   description: Localized
   /**

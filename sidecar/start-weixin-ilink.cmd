@@ -20,7 +20,9 @@ rem port); otherwise the default 9300. WXBRIDGE_PORT_FILE is inherited from the
 rem environment by the child process, so it needs no handling here.
 set "PORT=9300"
 if not "%WXBRIDGE_PORT%"=="" set "PORT=%WXBRIDGE_PORT%"
-set "TOKEN_FILE=%~dp0..\secrets\ilinkbridge.token"
+rem The plugin passes the token file it wrote itself, so the panel and this script can never disagree about the path;
+rem the fallback keeps a hand-run script working.
+if not "%WXBRIDGE_TOKEN_FILE%"=="" (set "TOKEN_FILE=%WXBRIDGE_TOKEN_FILE%") else (set "TOKEN_FILE=%~dp0..\secrets\ilinkbridge.token")
 set "AUTH_FILE=%~dp0weixin-ilink-bridge\data\weixin-ilink-auth.json"
 rem -------------------------------------------------------------------------
 
